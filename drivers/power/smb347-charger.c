@@ -41,11 +41,13 @@
 #define CFG_CURRENT_LIMIT_USB_MASK		0x0f
 #define CFG_VARIOUS_FUNCTION                    0x02
 #define CFG_INPUT_SOURCE_PRIORITY               BIT(2)
+#define CFG_AUTOMATIC_INPUT_CURRENT_LIMIT	BIT(4)
 #define CFG_FLOAT_VOLTAGE			0x03
 #define CFG_FLOAT_VOLTAGE_THRESHOLD_MASK	0xc0
 #define CFG_FLOAT_VOLTAGE_MASK			0x3F
 #define CFG_FLOAT_VOLTAGE_THRESHOLD_SHIFT	6
 #define CFG_CHARGE_CONTROL			0x04
+#define CFG_AUTOMATIC_POWER_SOURCE_DETECTION	BIT(2)
 #define CFG_AUTOMATIC_RECHARGE_DISABLE		BIT(7)
 #define CFG_STAT				0x05
 #define CFG_STAT_DISABLED			BIT(5)
@@ -123,7 +125,26 @@
 #define STAT_C_CHG_MASK				0x06
 #define STAT_C_CHG_SHIFT			1
 #define STAT_C_CHARGER_ERROR			BIT(6)
+#define STAT_D					0x3e
+#define STAT_D_APSD_RESULT_MASK			0x7
+#define STAT_D_APSD_COMPLETE			BIT(3)
 #define STAT_E					0x3f
+
+/* APSD results */
+#define APSD_RESULT_NOT_RUN			0x0
+#define APSD_RESULT_CDP				0x1
+#define APSD_RESULT_DCP				0x2
+#define APSD_RESULT_OTHER_CHARGER		0x3
+#define APSD_RESULT_SDP				0x4
+#define APSD_RESULT_ACA				0x5
+
+static enum power_supply_type apsd_to_pst[STAT_D_APSD_RESULT_MASK] = {
+	[APSD_RESULT_CDP] = POWER_SUPPLY_TYPE_USB_CDP,
+	[APSD_RESULT_DCP] = POWER_SUPPLY_TYPE_USB_DCP,
+	[APSD_RESULT_SDP] = POWER_SUPPLY_TYPE_USB,
+	[APSD_RESULT_ACA] = POWER_SUPPLY_TYPE_USB_ACA,
+	[APSD_RESULT_OTHER_CHARGER] = POWER_SUPPLY_TYPE_MAINS,
+};
 
 /**
  * struct smb347_charger - smb347 charger instance
@@ -146,6 +167,8 @@ struct smb347_charger {
 	struct power_supply	battery;
 	bool			mains_online;
 	bool			usb_online;
+	enum power_supply_type	usb_apsd_result;
+	bool			usb_apsd_enabled;
 	bool			charging_enabled;
 	unsigned int		mains_current_limit;
 	bool			usb_hc_mode;
@@ -231,9 +254,18 @@ static int current_to_hw(const unsigned int *tbl, size_t size, unsigned int val)
 
 static int smb347_read(struct smb347_charger *smb, u8 reg)
 {
+	int t;
 	int ret;
 
-	ret = i2c_smbus_read_byte_data(smb->client, reg);
+	for (t = 0; t < 20; t++) {
+		ret = i2c_smbus_read_byte_data(smb->client, reg);
+		if (ret >= 0)
+			break;
+		dev_dbg(&smb->client->dev, "%s: retry %d reg=0x%x ret=%d\n",
+			__func__, t, reg, ret);
+		msleep(20);
+	}
+
 	if (ret < 0)
 		dev_warn(&smb->client->dev, "failed to read reg 0x%x: %d\n",
 			 reg, ret);
@@ -242,12 +274,43 @@ static int smb347_read(struct smb347_charger *smb, u8 reg)
 
 static int smb347_write(struct smb347_charger *smb, u8 reg, u8 val)
 {
+	int t;
 	int ret;
 
-	ret = i2c_smbus_write_byte_data(smb->client, reg, val);
+	for (t = 0; t < 20; t++) {
+		ret = i2c_smbus_write_byte_data(smb->client, reg, val);
+		if (ret >= 0)
+			break;
+		dev_dbg(&smb->client->dev, "%s: retry %d reg=0x%x ret=%d\n",
+			__func__, t, reg, ret);
+		msleep(20);
+	}
+
 	if (ret < 0)
 		dev_warn(&smb->client->dev, "failed to write reg 0x%x: %d\n",
 			 reg, ret);
+	return ret;
+}
+
+static int smb347_read_block_data(struct smb347_charger *smb, u8 reg,
+				  u8 length, u8 *values)
+{
+	int t;
+	int ret;
+
+	for (t = 0; t < 20; t++) {
+		ret = i2c_smbus_read_i2c_block_data(smb->client, reg, length,
+						    values);
+		if (ret >= 0)
+			break;
+		dev_dbg(&smb->client->dev, "%s: retry %d reg=0x%x ret=%d\n",
+			__func__, t, reg, ret);
+		msleep(20);
+	}
+
+	if (ret < 0)
+		dev_warn(&smb->client->dev,
+			 "failed to block read reg 0x%x: %d\n", reg, ret);
 	return ret;
 }
 
@@ -759,7 +822,7 @@ static irqreturn_t smb347_interrupt(int irq, void *data)
 	u8 irqstat[6];
 	irqreturn_t ret = IRQ_NONE;
 
-	t = i2c_smbus_read_i2c_block_data(smb->client, IRQSTAT_A, 6, irqstat);
+	t = smb347_read_block_data(smb, IRQSTAT_A, 6, irqstat);
 	if (t < 0) {
 		dev_warn(&smb->client->dev,
 			 "reading IRQSTAT registers failed\n");
@@ -1018,31 +1081,12 @@ static int smb347_mains_set_property(struct power_supply *psy,
 {
 	struct smb347_charger *smb =
 		container_of(psy, struct smb347_charger, mains);
-	int ret;
 	bool oldval;
 
 	switch (prop) {
 	case POWER_SUPPLY_PROP_ONLINE:
 		oldval = smb->mains_online;
-
 		smb->mains_online = val->intval;
-
-		smb347_set_writable(smb, true);
-
-		ret = smb347_read(smb, CMD_A);
-		if (ret < 0)
-			return -EINVAL;
-
-		ret &= ~CMD_A_SUSPEND_ENABLED;
-		if (val->intval)
-			ret |= CMD_A_SUSPEND_ENABLED;
-
-		ret = smb347_write(smb, CMD_A, ret);
-
-		smb347_hw_init(smb);
-
-		smb347_set_writable(smb, false);
-
 		if (smb->mains_online != oldval)
 			power_supply_changed(psy);
 		return 0;
@@ -1076,6 +1120,108 @@ static enum power_supply_property smb347_mains_properties[] = {
 	POWER_SUPPLY_PROP_CURRENT_MAX,
 };
 
+static int apsd_detect(struct smb347_charger *smb, bool wait)
+{
+	int i;
+	int tries;
+	int ret;
+
+	smb347_update_status(smb);
+	mutex_lock(&smb->lock);
+
+	/*
+	 * If USBIN input disconnected then use UNKNOWN.
+	 */
+
+	if (!smb->usb_online) {
+		smb->usb_apsd_result = POWER_SUPPLY_TYPE_UNKNOWN;
+		ret = 0;
+		goto unlock;
+	}
+
+	/*
+	 * If APSD is now disabled then return cached result from previous
+	 * run.
+	 */
+
+	if (!smb->usb_apsd_enabled) {
+		ret = 0;
+		goto unlock;
+	}
+
+	tries = wait ? 8 : 1;
+
+	for (i = 1; i <= tries; i++) {
+		ret = smb347_read(smb, STAT_D);
+		if (ret < 0)
+			goto unlock;
+		if (ret & STAT_D_APSD_COMPLETE)
+			goto apsd_done;
+
+		if (i < tries)
+			msleep(100);
+	}
+
+	ret = 0;
+	goto unlock;
+
+apsd_done:
+	smb->usb_apsd_result = apsd_to_pst[ret & STAT_D_APSD_RESULT_MASK];
+	smb->usb.type = smb->usb_apsd_result;
+	ret = 0;
+
+unlock:
+	mutex_unlock(&smb->lock);
+	return ret;
+}
+
+static int __apsd_enable(struct smb347_charger *smb, bool enable)
+{
+	int ret = 0;
+	int chgc;
+
+	smb347_set_writable(smb, true);
+	ret = smb347_read(smb, CFG_CHARGE_CONTROL);
+	if (ret < 0)
+		goto writeoff;
+
+	chgc = ret;
+	if (enable)
+		chgc |= CFG_AUTOMATIC_POWER_SOURCE_DETECTION;
+	else
+		chgc &= ~CFG_AUTOMATIC_POWER_SOURCE_DETECTION;
+
+	ret = smb347_write(smb, CFG_CHARGE_CONTROL, chgc);
+	if (ret)
+		goto writeoff;
+	smb->usb_apsd_enabled = enable;
+	ret = 0;
+
+writeoff:
+	smb347_set_writable(smb, false);
+	return ret;
+}
+
+static int apsd_enable(struct smb347_charger *smb, bool enable)
+{
+	int ret = 0;
+
+	mutex_lock(&smb->lock);
+
+	if (smb->usb_apsd_enabled == enable)
+		goto skip;
+
+	ret = __apsd_enable(smb, enable);
+	mutex_unlock(&smb->lock);
+	if (!ret)
+		ret = apsd_detect(smb, true);
+	return ret;
+
+skip:
+	mutex_unlock(&smb->lock);
+	return ret;
+}
+
 static int smb347_usb_get_property(struct power_supply *psy,
 				   enum power_supply_property prop,
 				   union power_supply_propval *val)
@@ -1094,6 +1240,15 @@ static int smb347_usb_get_property(struct power_supply *psy,
 
 	case POWER_SUPPLY_PROP_USB_OTG:
 		val->intval = smb->usb_otg_enabled;
+		return 0;
+
+	case POWER_SUPPLY_PROP_REMOTE_TYPE:
+		apsd_detect(smb, false);
+		val->intval = smb->usb_apsd_result;
+		return 0;
+
+	case POWER_SUPPLY_PROP_CHARGER_DETECTION:
+		val->intval = smb->usb_apsd_enabled;
 		return 0;
 
 	default:
@@ -1115,6 +1270,7 @@ static int smb347_usb_set_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_ONLINE:
 		oldval = smb->usb_online;
 		smb->usb_online = val->intval;
+		apsd_detect(smb, true);
 
 		if (smb->usb_online != oldval)
 			power_supply_changed(psy);
@@ -1146,6 +1302,10 @@ static int smb347_usb_set_property(struct power_supply *psy,
 
 		break;
 
+	case POWER_SUPPLY_PROP_CHARGER_DETECTION:
+		ret = apsd_enable(smb, val->intval);
+		break;
+
 	default:
 		break;
 	}
@@ -1159,6 +1319,7 @@ static int smb347_usb_property_is_writeable(struct power_supply *psy,
 	switch (prop) {
 	case POWER_SUPPLY_PROP_USB_HC:
 	case POWER_SUPPLY_PROP_USB_OTG:
+	case POWER_SUPPLY_PROP_CHARGER_DETECTION:
 		return 1;
 	default:
 		break;
@@ -1171,6 +1332,8 @@ static enum power_supply_property smb347_usb_properties[] = {
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_USB_HC,
 	POWER_SUPPLY_PROP_USB_OTG,
+	POWER_SUPPLY_PROP_REMOTE_TYPE,
+	POWER_SUPPLY_PROP_CHARGER_DETECTION,
 };
 
 static int smb347_battery_get_property(struct power_supply *psy,
@@ -1290,6 +1453,20 @@ static int smb347_battery_get_property(struct power_supply *psy,
 		val->strval = pdata->battery_info.name;
 		break;
 
+	case POWER_SUPPLY_PROP_USB_INPRIORITY:
+		ret = smb347_read(smb, CFG_VARIOUS_FUNCTION);
+		if (ret < 0)
+			return ret;
+		val->intval = ret & CFG_INPUT_SOURCE_PRIORITY ? 1 : 0;
+		break;
+
+	case POWER_SUPPLY_PROP_AUTO_CURRENT_LIMIT:
+		ret = smb347_read(smb, CFG_VARIOUS_FUNCTION);
+		if (ret < 0)
+			return ret;
+		val->intval = ret & CFG_AUTOMATIC_INPUT_CURRENT_LIMIT ? 1 : 0;
+		break;
+
 	default:
 		return -EINVAL;
 	}
@@ -1310,6 +1487,50 @@ static int smb347_battery_set_property(struct power_supply *psy,
 		ret = smb347_charging_set(smb, val->intval);
 		break;
 
+	case POWER_SUPPLY_PROP_USB_INPRIORITY:
+		smb347_set_writable(smb, true);
+
+		ret = smb347_read(smb, CMD_A);
+		if (ret < 0)
+			goto priority_fail;
+		ret |= CMD_A_SUSPEND_ENABLED;
+		if (val->intval)
+			ret &= ~CMD_A_SUSPEND_ENABLED;
+		ret = smb347_write(smb, CMD_A, ret);
+		if (ret < 0)
+			goto priority_fail;
+
+		ret = smb347_read(smb, CFG_VARIOUS_FUNCTION);
+		if (ret < 0)
+			goto priority_fail;
+		ret &= ~(CFG_INPUT_SOURCE_PRIORITY);
+		if (val->intval)
+			ret |= CFG_INPUT_SOURCE_PRIORITY;
+		ret = smb347_write(smb, CFG_VARIOUS_FUNCTION, ret);
+		smb347_hw_init(smb);
+		if (ret < 0)
+			goto priority_fail;
+		ret = 0;
+priority_fail:
+		smb347_set_writable(smb, false);
+		break;
+
+	case POWER_SUPPLY_PROP_AUTO_CURRENT_LIMIT:
+		smb347_set_writable(smb, true);
+		ret = smb347_read(smb, CFG_VARIOUS_FUNCTION);
+		if (ret < 0)
+			goto aicl_fail;
+		ret &= ~(CFG_AUTOMATIC_INPUT_CURRENT_LIMIT);
+		if (val->intval)
+			ret |= CFG_AUTOMATIC_INPUT_CURRENT_LIMIT;
+		ret = smb347_write(smb, CFG_VARIOUS_FUNCTION, ret);
+		if (ret < 0)
+			goto aicl_fail;
+		ret = 0;
+aicl_fail:
+		smb347_set_writable(smb, false);
+		break;
+
 	default:
 		break;
 	}
@@ -1322,6 +1543,8 @@ static int smb347_battery_property_is_writeable(struct power_supply *psy,
 {
 	switch (prop) {
 	case POWER_SUPPLY_PROP_CHARGE_ENABLED:
+	case POWER_SUPPLY_PROP_USB_INPRIORITY:
+	case POWER_SUPPLY_PROP_AUTO_CURRENT_LIMIT:
 		return 1;
 	default:
 		break;
@@ -1341,6 +1564,8 @@ static enum power_supply_property smb347_battery_properties[] = {
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_CHARGE_ENABLED,
 	POWER_SUPPLY_PROP_MODEL_NAME,
+	POWER_SUPPLY_PROP_USB_INPRIORITY,
+	POWER_SUPPLY_PROP_AUTO_CURRENT_LIMIT,
 };
 
 static int smb347_debugfs_show(struct seq_file *s, void *data)
@@ -1453,6 +1678,9 @@ static int smb347_probe(struct i2c_client *client,
 	ret = smb347_hw_init(smb);
 	if (ret < 0)
 		return ret;
+
+	/* Initialize APSD disabled */
+	__apsd_enable(smb, false);
 
 	smb->mains.name = "smb347-mains";
 	smb->mains.type = POWER_SUPPLY_TYPE_MAINS;

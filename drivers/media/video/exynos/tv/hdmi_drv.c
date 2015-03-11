@@ -42,9 +42,6 @@ MODULE_AUTHOR("Tomasz Stanislawski, <t.stanislaws@samsung.com>");
 MODULE_DESCRIPTION("Samsung HDMI");
 MODULE_LICENSE("GPL");
 
-/* default preset configured on probe */
-#define HDMI_DEFAULT_PRESET V4L2_DV_1080P60
-
 /* I2C module and id for HDMIPHY */
 static struct i2c_board_info hdmiphy_info = {
 	I2C_BOARD_INFO("hdmiphy", 0x38),
@@ -276,14 +273,16 @@ static int hdmi_s_power(struct v4l2_subdev *sd, int on)
 #endif
 
 		disable_irq(hdev->ext_irq);
-		cancel_work_sync(&hdev->hpd_work_ext);
+		cancel_delayed_work_sync(&hdev->hpd_work_ext);
 
 		s5p_v4l2_int_src_hdmi_hpd();
 		hdmi_hpd_enable(hdev, 1);
+		hdmi_hpd_clear_int(hdev);
 		enable_irq(hdev->int_irq);
 
 		dev_info(hdev->dev, "HDMI interrupt changed to internal\n");
 	} else {
+		cancel_work_sync(&hdev->work);
 		hdmi_hpd_enable(hdev, 0);
 		disable_irq(hdev->int_irq);
 		cancel_work_sync(&hdev->hpd_work);
@@ -320,6 +319,35 @@ int hdmi_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	case V4L2_CID_TV_SET_ASPECT_RATIO:
 		hdev->aspect = ctrl->value;
 		break;
+	case V4L2_CID_TV_ENABLE_HDMI_AUDIO:
+		mutex_lock(&hdev->mutex);
+		hdev->audio_enable = !!ctrl->value;
+		if (is_hdmi_streaming(hdev)) {
+			hdmi_set_infoframe(hdev);
+
+			hdmi_audio_enable(hdev, hdev->audio_enable);
+		}
+		mutex_unlock(&hdev->mutex);
+		break;
+	case V4L2_CID_TV_SET_NUM_CHANNELS:
+		mutex_lock(&hdev->mutex);
+		if ((ctrl->value == 2) || (ctrl->value == 6) ||
+							(ctrl->value == 8)) {
+			hdev->audio_channel_count = ctrl->value;
+		} else {
+			dev_err(dev, "invalid channel count\n");
+			hdev->audio_channel_count = 2;
+		}
+		if (is_hdmi_streaming(hdev))
+			hdmi_set_infoframe(hdev);
+		mutex_unlock(&hdev->mutex);
+		break;
+	case V4L2_CID_TV_SET_COLOR_RANGE:
+		hdev->color_range = ctrl->value;
+		break;
+	case V4L2_CID_TV_HDCP_ENABLE:
+		hdev->hdcp_info.hdcp_enable = ctrl->value;
+		break;
 	default:
 		dev_err(dev, "invalid control id\n");
 		ret = -EINVAL;
@@ -333,12 +361,25 @@ int hdmi_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 {
 	struct hdmi_device *hdev = sd_to_hdmi_dev(sd);
 	struct device *dev = hdev->dev;
+	int ret = 0;
 
-	ctrl->value = switch_get_state(&hdev->hpd_switch);
-	dev_dbg(dev, "HDMI cable is %s\n", ctrl->value ?
-			"connected" : "disconnected");
+	switch (ctrl->id) {
+	case V4L2_CID_TV_HPD_STATUS:
+		ctrl->value = switch_get_state(&hdev->hpd_switch);
+		break;
+	case V4L2_CID_TV_GET_DVI_MODE:
+		ctrl->value = hdev->dvi_mode;
+		break;
+	case V4L2_CID_TV_MAX_AUDIO_CHANNELS:
+		ctrl->value = edid_max_audio_channels(hdev);
+		break;
+	default:
+		dev_err(dev, "invalid control id\n");
+		ret = -EINVAL;
+		break;
+	}
 
-	return 0;
+	return ret;
 }
 
 static int hdmi_s_dv_preset(struct v4l2_subdev *sd,
@@ -395,11 +436,15 @@ static int hdmi_s_mbus_fmt(struct v4l2_subdev *sd,
 }
 
 static int hdmi_enum_dv_presets(struct v4l2_subdev *sd,
-	struct v4l2_dv_enum_preset *preset)
+	struct v4l2_dv_enum_preset *enum_preset)
 {
-	if (preset->index >= hdmi_pre_cnt)
+	struct hdmi_device *hdev = sd_to_hdmi_dev(sd);
+	u32 preset = edid_enum_presets(hdev, enum_preset->index);
+
+	if (preset == V4L2_DV_INVALID)
 		return -EINVAL;
-	return v4l_fill_dv_preset_info(hdmi_conf[preset->index].preset, preset);
+
+	return v4l_fill_dv_preset_info(preset, enum_preset);
 }
 
 static const struct v4l2_subdev_core_ops hdmi_sd_core_ops = {
@@ -680,33 +725,54 @@ static void hdmi_entity_info_print(struct hdmi_device *hdev)
 irqreturn_t hdmi_irq_handler_ext(int irq, void *dev_data)
 {
 	struct hdmi_device *hdev = dev_data;
-	queue_work(system_nrt_wq, &hdev->hpd_work_ext);
+	queue_delayed_work(system_nrt_wq, &hdev->hpd_work_ext, 0);
 
 	return IRQ_HANDLED;
+}
+
+static void hdmi_hpd_changed(struct hdmi_device *hdev, int state)
+{
+	u32 preset;
+	int ret;
+
+	if (state == switch_get_state(&hdev->hpd_switch))
+		return;
+
+	if (state) {
+		ret = edid_update(hdev);
+		if (ret == -ENODEV)
+			return;
+
+		preset = edid_preferred_preset(hdev);
+		if (preset == V4L2_DV_INVALID)
+			preset = HDMI_DEFAULT_PRESET;
+
+		hdev->dvi_mode = !edid_supports_hdmi(hdev);
+		hdev->cur_preset = preset;
+		hdev->cur_conf = hdmi_preset2conf(preset);
+	}
+
+	switch_set_state(&hdev->hpd_switch, state);
+	switch_set_state(&hdev->hpd_audio_switch, state ? !hdev->dvi_mode : 0);
+
+	dev_info(hdev->dev, "%s\n", state ? "plugged" : "unplugged");
 }
 
 static void hdmi_hpd_work_ext(struct work_struct *work)
 {
 	int state;
 	struct hdmi_device *hdev = container_of(work, struct hdmi_device,
-						hpd_work_ext);
-
+						hpd_work_ext.work);
 	state = s5p_v4l2_hpd_read_gpio();
-	switch_set_state(&hdev->hpd_switch, state);
-
-	dev_info(hdev->dev, "%s (ext)\n", state ? "plugged" : "unplugged");
+	hdmi_hpd_changed(hdev, state);
 }
 
 static void hdmi_hpd_work(struct work_struct *work)
 {
-	int state;
 	struct hdmi_device *hdev = container_of(work, struct hdmi_device,
 						hpd_work);
 
-	state = hdmi_hpd_status(hdev);
-	switch_set_state(&hdev->hpd_switch, state);
-
-	dev_info(hdev->dev, "%s (int)\n", state ? "plugged" : "unplugged");
+	hdmi_hpd_changed(hdev, 0);
 }
 
 static int __devinit hdmi_probe(struct platform_device *pdev)
@@ -769,7 +835,8 @@ static int __devinit hdmi_probe(struct platform_device *pdev)
 	hdmi_dev->int_irq = res->start;
 
 	INIT_WORK(&hdmi_dev->hpd_work, hdmi_hpd_work);
-	INIT_WORK(&hdmi_dev->hpd_work_ext, hdmi_hpd_work_ext);
+	INIT_DELAYED_WORK(&hdmi_dev->hpd_work_ext, hdmi_hpd_work_ext);
+	mutex_init(&hdmi_dev->mutex);
 
 	/* setting v4l2 name to prevent WARN_ON in v4l2_device_register */
 	strlcpy(hdmi_dev->v4l2_dev.name, dev_name(dev),
@@ -827,6 +894,8 @@ static int __devinit hdmi_probe(struct platform_device *pdev)
 
 	hdmi_dev->hpd_switch.name = "hdmi";
 	switch_dev_register(&hdmi_dev->hpd_switch);
+	hdmi_dev->hpd_audio_switch.name = "hdmi_audio";
+	switch_dev_register(&hdmi_dev->hpd_audio_switch);
 
 	ret = request_irq(hdmi_dev->int_irq, hdmi_irq_handler,
 			0, "hdmi-int", hdmi_dev);
@@ -844,18 +913,15 @@ static int __devinit hdmi_probe(struct platform_device *pdev)
 		goto fail_ext;
 	}
 
-	if (s5p_v4l2_hpd_read_gpio())
-		switch_set_state(&hdmi_dev->hpd_switch, 1);
-	else
-		switch_set_state(&hdmi_dev->hpd_switch, 0);
-
 	hdmi_dev->cur_preset = HDMI_DEFAULT_PRESET;
 	/* FIXME: missing fail preset is not supported */
 	hdmi_dev->cur_conf = hdmi_preset2conf(hdmi_dev->cur_preset);
 
-	/* default audio configuration : enable audio */
-	hdmi_dev->audio_enable = 1;
+	/* default audio configuration : disable audio */
+	hdmi_dev->audio_enable = 0;
+	hdmi_dev->audio_channel_count = 2;
 	hdmi_dev->sample_rate = DEFAULT_SAMPLE_RATE;
+	hdmi_dev->color_range = 3;
 	hdmi_dev->bits_per_sample = DEFAULT_BITS_PER_SAMPLE;
 	hdmi_dev->audio_codec = DEFAULT_AUDIO_CODEC;
 
@@ -874,7 +940,12 @@ static int __devinit hdmi_probe(struct platform_device *pdev)
 	if (ret)
 		goto fail_irq;
 
+	queue_delayed_work(system_nrt_wq, &hdmi_dev->hpd_work_ext,
+					  msecs_to_jiffies(1000));
+
 	dev_info(dev, "probe sucessful\n");
+
+	hdmi_debugfs_init(hdmi_dev);
 
 	return 0;
 
@@ -913,6 +984,7 @@ static int __devexit hdmi_remove(struct platform_device *pdev)
 	free_irq(hdmi_dev->ext_irq, hdmi_dev);
 	free_irq(hdmi_dev->int_irq, hdmi_dev);
 	switch_dev_unregister(&hdmi_dev->hpd_switch);
+	switch_dev_unregister(&hdmi_dev->hpd_audio_switch);
 	iounmap(hdmi_dev->regs);
 	hdmi_resources_cleanup(hdmi_dev);
 	flush_workqueue(hdmi_dev->hdcp_wq);

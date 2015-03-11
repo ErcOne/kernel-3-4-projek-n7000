@@ -427,6 +427,8 @@ static void s3c24xx_serial_shutdown(struct uart_port *port)
 	if (ourport->tx_claimed) {
 		if (!s3c24xx_serial_has_interrupt_mask(port))
 			free_irq(ourport->tx_irq, ourport);
+		else
+			free_irq(port->irq, ourport);
 		tx_enabled(port) = 0;
 		ourport->tx_claimed = 0;
 	}
@@ -434,6 +436,8 @@ static void s3c24xx_serial_shutdown(struct uart_port *port)
 	if (ourport->rx_claimed) {
 		if (!s3c24xx_serial_has_interrupt_mask(port))
 			free_irq(ourport->rx_irq, ourport);
+		/* else already freed above as the s3c64xx_serial_startup()
+		 * will have set both tx_claimed and rx_claimed */
 		ourport->rx_claimed = 0;
 		rx_enabled(port) = 0;
 	}
@@ -871,6 +875,13 @@ s3c24xx_serial_verify_port(struct uart_port *port, struct serial_struct *ser)
 	return 0;
 }
 
+static void s3c24xx_serial_wake_peer(struct uart_port *port)
+{
+	struct s3c2410_uartcfg *cfg = s3c24xx_port_to_cfg(port);
+
+	if (cfg->wake_peer)
+		cfg->wake_peer(port);
+}
 
 #ifdef CONFIG_SERIAL_SAMSUNG_CONSOLE
 
@@ -899,6 +910,7 @@ static struct uart_ops s3c24xx_serial_ops = {
 	.request_port	= s3c24xx_serial_request_port,
 	.config_port	= s3c24xx_serial_config_port,
 	.verify_port	= s3c24xx_serial_verify_port,
+	.wake_peer	= s3c24xx_serial_wake_peer,
 };
 
 static struct uart_driver s3c24xx_uart_drv = {

@@ -61,6 +61,25 @@ obj-$(CONFIG_MACH_EXYNOS5_DT)		+= mach-exynos5-dt.o
 
 obj-$(CONFIG_MACH_SMDK5250)		+= mach-smdk5250.o
 
+# Manta board files
+obj-$(CONFIG_MACH_MANTA)		+= board-manta.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-audio.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-battery.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-pogo.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-display.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-input.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-power.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-wifi.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-media.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-camera.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-sensors.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-gps.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-jack.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-vibrator.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-nfc.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-bluetooth.o
+obj-$(CONFIG_MACH_MANTA)		+= board-manta-connector.o
+
 # device support
 
 obj-y					+= dev-uart.o

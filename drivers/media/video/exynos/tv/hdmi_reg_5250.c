@@ -12,8 +12,10 @@
  */
 
 #include "hdmi.h"
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/pm_runtime.h>
+#include <linux/seq_file.h>
 #include <plat/devs.h>
 #include <plat/tv-core.h>
 
@@ -2257,20 +2259,20 @@ irqreturn_t hdmi_irq_handler(int irq, void *dev_data)
 				hdcp_stop(hdev);
 			hdmi_write_mask(hdev, HDMI_INTC_FLAG_0, ~0,
 					HDMI_INTC_FLAG_HPD_UNPLUG);
+			queue_work(system_nrt_wq, &hdev->hpd_work);
 		}
 		if (intc_flag & HDMI_INTC_FLAG_HPD_PLUG) {
 			hdmi_write_mask(hdev, HDMI_INTC_FLAG_0, ~0,
 					HDMI_INTC_FLAG_HPD_PLUG);
 		}
+
 		if (intc_flag & HDMI_INTC_FLAG_HDCP) {
-			pr_info("hdcp interrupt occur\n");
+			pr_debug("%s: hdcp interrupt occur\n", __func__);
 			hdcp_irq_handler(hdev);
 			hdmi_write_mask(hdev, HDMI_INTC_FLAG_0, ~0,
 					HDMI_INTC_FLAG_HDCP);
 		}
 	}
-
-	queue_work(system_nrt_wq, &hdev->hpd_work);
 
 	return IRQ_HANDLED;
 }
@@ -2290,7 +2292,10 @@ void hdmi_reg_init(struct hdmi_device *hdev)
 	/* RGB888 is default output format of HDMI,
 	 * look to CEA-861-D, table 7 for more detail */
 	hdmi_writeb(hdev, HDMI_AVI_BYTE(1), 0 << 5);
-	hdmi_write_mask(hdev, HDMI_CON_1, 2, 3 << 5);
+	if (hdev->color_range == 0 || hdev->color_range == 2)
+		hdmi_write_mask(hdev, HDMI_CON_1, 0, 3 << 5);
+	else
+		hdmi_write_mask(hdev, HDMI_CON_1, 1 << 5, 3 << 5);
 }
 
 void hdmi_set_dvi_mode(struct hdmi_device *hdev)
@@ -2476,9 +2481,19 @@ void hdmi_enable(struct hdmi_device *hdev, int on)
 
 void hdmi_hpd_enable(struct hdmi_device *hdev, int on)
 {
-	/* enable HPD interrupts */
-	hdmi_write_mask(hdev, HDMI_INTC_CON_0, ~0, HDMI_INTC_EN_GLOBAL |
-			HDMI_INTC_EN_HPD_PLUG | HDMI_INTC_EN_HPD_UNPLUG);
+	/* enable/disable HPD interrupts */
+	if (on)
+		hdmi_write_mask(hdev, HDMI_INTC_CON_0, ~0, HDMI_INTC_EN_GLOBAL |
+				HDMI_INTC_EN_HPD_PLUG | HDMI_INTC_EN_HPD_UNPLUG);
+	else
+		hdmi_write_mask(hdev, HDMI_INTC_CON_0, 0, HDMI_INTC_EN_GLOBAL |
+				HDMI_INTC_EN_HPD_PLUG | HDMI_INTC_EN_HPD_UNPLUG);
+}
+
+void hdmi_hpd_clear_int(struct hdmi_device *hdev)
+{
+	hdmi_write_mask(hdev, HDMI_INTC_FLAG_0, ~0,
+			HDMI_INTC_FLAG_HPD_PLUG | HDMI_INTC_FLAG_HPD_UNPLUG);
 }
 
 void hdmi_tg_enable(struct hdmi_device *hdev, int on)
@@ -2565,7 +2580,7 @@ void hdmi_reg_infoframe(struct hdmi_device *hdev,
 		hdmi_writeb(hdev, HDMI_AVI_HEADER2, infoframe->len);
 		hdr_sum = infoframe->type + infoframe->ver + infoframe->len;
 		hdmi_writeb(hdev, HDMI_AVI_BYTE(1), hdev->output_fmt << 5 |
-				AVI_ACTIVE_FORMAT_VALID);
+				AVI_ACTIVE_FORMAT_VALID | AVI_UNDERSCAN);
 		if (hdev->aspect == HDMI_ASPECT_RATIO_4_3 &&
 				(hdev->cur_preset == V4L2_DV_480P59_94 ||
 				 hdev->cur_preset == V4L2_DV_480P60)) {
@@ -2583,7 +2598,11 @@ void hdmi_reg_infoframe(struct hdmi_device *hdev,
 		}
 
 		hdmi_writeb(hdev, HDMI_AVI_BYTE(2), aspect_ratio |
-				AVI_SAME_AS_PIC_ASPECT_RATIO);
+				AVI_SAME_AS_PIC_ASPECT_RATIO | AVI_ITU709);
+		if (hdev->color_range == 0 || hdev->color_range == 2)
+			hdmi_writeb(hdev, HDMI_AVI_BYTE(3), AVI_FULL_RANGE);
+		else
+			hdmi_writeb(hdev, HDMI_AVI_BYTE(3), AVI_LIMITED_RANGE);
 		dev_dbg(dev, "VIC code = %d\n", vic);
 		hdmi_writeb(hdev, HDMI_AVI_BYTE(4), vic);
 		chksum = hdmi_chksum(hdev, HDMI_AVI_BYTE(1), infoframe->len, hdr_sum);
@@ -2596,6 +2615,13 @@ void hdmi_reg_infoframe(struct hdmi_device *hdev,
 		hdmi_writeb(hdev, HDMI_AUI_HEADER1, infoframe->ver);
 		hdmi_writeb(hdev, HDMI_AUI_HEADER2, infoframe->len);
 		hdr_sum = infoframe->type + infoframe->ver + infoframe->len;
+		/* speaker placement */
+		if (hdev->audio_channel_count == 6)
+			hdmi_writeb(hdev, HDMI_AUI_BYTE(4), 0x0b);
+		else if (hdev->audio_channel_count == 8)
+			hdmi_writeb(hdev, HDMI_AUI_BYTE(4), 0x13);
+		else
+			hdmi_writeb(hdev, HDMI_AUI_BYTE(4), 0x00);
 		chksum = hdmi_chksum(hdev, HDMI_AUI_BYTE(1), infoframe->len, hdr_sum);
 		dev_dbg(dev, "AUI checksum = 0x%x\n", chksum);
 		hdmi_writeb(hdev, HDMI_AUI_CHECK_SUM, chksum);
@@ -2751,7 +2777,20 @@ void hdmi_reg_i2s_audio_init(struct hdmi_device *hdev)
 		HDMI_I2S_CONSUMER_FORMAT;
 	hdmi_write(hdev, HDMI_I2S_CH_ST_0, val);
 	hdmi_write(hdev, HDMI_I2S_CH_ST_1, HDMI_I2S_CD_PLAYER);
-	hdmi_write(hdev, HDMI_I2S_CH_ST_2, HDMI_I2S_SET_SOURCE_NUM(0));
+	hdmi_writeb(hdev, HDMI_I2S_CH_ST_2, HDMI_I2S_SET_SOURCE_NUM(0) |
+			HDMI_I2S_SET_CHANNEL_NUM(0x6));
+	hdmi_writeb(hdev, HDMI_ASP_CON,
+			HDMI_AUD_MODE_MULTI_CH | HDMI_AUD_SP_AUD2_EN |
+			HDMI_AUD_SP_AUD1_EN | HDMI_AUD_SP_AUD0_EN);
+	hdmi_writeb(hdev, HDMI_ASP_CHCFG0,
+			HDMI_SPK0R_SEL_I_PCM0R | HDMI_SPK0L_SEL_I_PCM0L);
+	hdmi_writeb(hdev, HDMI_ASP_CHCFG1,
+			HDMI_SPK0R_SEL_I_PCM1L | HDMI_SPK0L_SEL_I_PCM1R);
+	hdmi_writeb(hdev, HDMI_ASP_CHCFG2,
+			HDMI_SPK0R_SEL_I_PCM2R | HDMI_SPK0L_SEL_I_PCM2L);
+	hdmi_writeb(hdev, HDMI_ASP_CHCFG3,
+			HDMI_SPK0R_SEL_I_PCM3R | HDMI_SPK0L_SEL_I_PCM3L);
+
 	val = HDMI_I2S_CLK_ACCUR_LEVEL_1 |
 		HDMI_I2S_SET_SAMPLING_FREQ(sample_frq);
 	hdmi_write(hdev, HDMI_I2S_CH_ST_3, val);
@@ -2778,7 +2817,7 @@ void hdmi_reg_i2s_audio_init(struct hdmi_device *hdev)
 void hdmi_audio_enable(struct hdmi_device *hdev, int on)
 {
 	if (on) {
-		if (hdev->dvi_mode)
+		if (hdev->dvi_mode || !hdev->audio_enable)
 			return;
 		hdmi_write_mask(hdev, HDMI_CON_0, ~0, HDMI_ASP_ENABLE);
 	} else
@@ -2806,7 +2845,7 @@ int hdmi_hpd_status(struct hdmi_device *hdev)
 
 int is_hdmi_streaming(struct hdmi_device *hdev)
 {
-	if (hdmi_hpd_status(hdev) && hdev->streaming)
+	if (hdev->streaming && hdmi_hpd_status(hdev))
 		return 1;
 	return 0;
 }
@@ -2854,6 +2893,89 @@ void hdmi_sw_reset(struct hdmi_device *hdev)
 	hdmi_write_mask(hdev, HDMI_CORE_RSTOUT, 0, HDMI_CORE_SW_RSTOUT);
 	mdelay(10);
 	hdmi_write_mask(hdev, HDMI_CORE_RSTOUT, ~0, HDMI_CORE_SW_RSTOUT);
+}
+
+static int hdmi_debugfs_show(struct seq_file *s, void *unused)
+{
+	struct hdmi_device *hdev = s->private;
+	int i;
+
+	mutex_lock(&hdev->mutex);
+
+	if (!hdev->streaming) {
+		mutex_unlock(&hdev->mutex);
+		seq_printf(s, "Not streaming\n");
+		return 0;
+	}
+
+#define DUMPREG(reg_id) \
+		seq_printf(s, "%-20s %08x\n", #reg_id, \
+			   readl(hdev->regs + reg_id))
+
+	DUMPREG(HDMI_INTC_CON_0);
+	DUMPREG(HDMI_INTC_FLAG_0);
+	DUMPREG(HDMI_HPD_STATUS);
+	DUMPREG(HDMI_INTC_CON_1);
+	DUMPREG(HDMI_INTC_FLAG_1);
+	DUMPREG(HDMI_PHY_STATUS_0);
+	DUMPREG(HDMI_PHY_STATUS_PLL);
+	DUMPREG(HDMI_PHY_CON_0);
+	DUMPREG(HDMI_PHY_RSTOUT);
+	DUMPREG(HDMI_PHY_VPLL);
+	DUMPREG(HDMI_PHY_CMU);
+	DUMPREG(HDMI_CORE_RSTOUT);
+
+	DUMPREG(HDMI_CON_0);
+	DUMPREG(HDMI_CON_1);
+	DUMPREG(HDMI_CON_2);
+	DUMPREG(HDMI_STATUS);
+	DUMPREG(HDMI_PHY_STATUS);
+	DUMPREG(HDMI_STATUS_EN);
+	DUMPREG(HDMI_HPD);
+	DUMPREG(HDMI_MODE_SEL);
+	DUMPREG(HDMI_ENC_EN);
+	DUMPREG(HDMI_DC_CONTROL);
+	DUMPREG(HDMI_VIDEO_PATTERN_GEN);
+
+	DUMPREG(HDMI_AVI_CON);
+	DUMPREG(HDMI_AVI_HEADER0);
+	DUMPREG(HDMI_AVI_HEADER1);
+	DUMPREG(HDMI_AVI_HEADER2);
+	DUMPREG(HDMI_AVI_CHECK_SUM);
+	for (i = 1; i < 6; ++i)
+		DUMPREG(HDMI_AVI_BYTE(i));
+
+	DUMPREG(HDMI_VSI_CON);
+	DUMPREG(HDMI_VSI_HEADER0);
+	DUMPREG(HDMI_VSI_HEADER1);
+	DUMPREG(HDMI_VSI_HEADER2);
+	for (i = 0; i < 7; ++i)
+		DUMPREG(HDMI_VSI_DATA(i));
+	DUMPREG(HDMI_AUI_CON);
+	DUMPREG(HDMI_ACR_CON);
+
+#undef DUMPREG
+
+	mutex_unlock(&hdev->mutex);
+	return 0;
+}
+
+static int hdmi_debugfs_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, hdmi_debugfs_show, inode->i_private);
+}
+
+static const struct file_operations hdmi_debugfs_fops = {
+	.open           = hdmi_debugfs_open,
+	.read           = seq_read,
+	.llseek         = seq_lseek,
+	.release        = single_release,
+};
+
+void hdmi_debugfs_init(struct hdmi_device *hdev)
+{
+	debugfs_create_file(dev_name(hdev->dev), S_IRUGO, NULL,
+			    hdev, &hdmi_debugfs_fops);
 }
 
 void hdmi_dumpregs(struct hdmi_device *hdev, char *prefix)

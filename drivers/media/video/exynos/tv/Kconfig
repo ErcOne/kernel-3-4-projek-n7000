@@ -28,6 +28,7 @@ config VIDEO_EXYNOS_HDMI
 	depends on VIDEO_EXYNOS_TV
 	depends on SWITCH
 	select VIDEO_EXYNOS_HDMIPHY
+	select FB_MODE_HELPERS
 	help
 	  Say Y here if you want support for the HDMI output
 	  interface in S5P Samsung SoC. The driver can be compiled
@@ -38,7 +39,7 @@ config VIDEO_EXYNOS_HDMI
 config VIDEO_EXYNOS_HDMI_AUDIO_I2S
 	bool "Enable HDMI audio using I2S path"
 	depends on VIDEO_EXYNOS_HDMI
-	depends on SND_SOC_SAMSUNG_SMDK_WM8994
+	depends on SND_SOC_SAMSUNG_SMDK_WM8994 || SND_SOC_SAMSUNG_MANTA_WM1811
 	default y
 	help
 	  Enables HDMI audio through I2S path.

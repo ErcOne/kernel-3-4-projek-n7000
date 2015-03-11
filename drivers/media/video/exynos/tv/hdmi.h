@@ -21,6 +21,7 @@
 #include <linux/io.h>
 #include <linux/clk.h>
 #include <linux/interrupt.h>
+#include <linux/mutex.h>
 #include <linux/regulator/consumer.h>
 #include <linux/switch.h>
 
@@ -29,6 +30,9 @@
 
 #define INFOFRAME_CNT          2
 
+/* default preset configured on probe */
+#define HDMI_DEFAULT_PRESET	V4L2_DV_720P60
+
 #define HDMI_VSI_VERSION	0x01
 #define HDMI_AVI_VERSION	0x02
 #define HDMI_AUI_VERSION	0x01
@@ -36,10 +40,14 @@
 #define HDMI_AVI_LENGTH		0x0d
 #define HDMI_AUI_LENGTH		0x0a
 
+#define AVI_UNDERSCAN			(2 << 0)
 #define AVI_ACTIVE_FORMAT_VALID		(1 << 4)
 #define AVI_PIC_ASPECT_RATIO_4_3	(1 << 4)
 #define AVI_PIC_ASPECT_RATIO_16_9	(2 << 4)
 #define AVI_SAME_AS_PIC_ASPECT_RATIO	8
+#define AVI_LIMITED_RANGE		(1 << 2)
+#define AVI_FULL_RANGE			(2 << 2)
+#define AVI_ITU709			(2 << 6)
 
 /* HDMI audio configuration value */
 #define DEFAULT_SAMPLE_RATE	44100
@@ -258,7 +266,6 @@ struct hdcp_info {
 	u8 is_repeater;
 	u32 hdcp_start;
 	int hdcp_enable;
-	spinlock_t reset_lock;
 
 	enum HDCP_EVENT	event;
 	enum HDCP_STATE	auth_status;
@@ -294,6 +301,8 @@ struct hdmi_device {
 	struct hdmi_infoframe infoframe[INFOFRAME_CNT];
 	/** audio on/off control flag */
 	int audio_enable;
+	/** number of audio channels */
+	int audio_channel_count;
 	/** audio sample rate */
 	int sample_rate;
 	/** audio bits per sample */
@@ -312,11 +321,15 @@ struct hdmi_device {
 
 	/* HPD releated */
 	struct work_struct hpd_work;
-	struct work_struct hpd_work_ext;
+	struct delayed_work hpd_work_ext;
 	struct switch_dev hpd_switch;
+	struct switch_dev hpd_audio_switch;
 
 	/* choose DVI or HDMI mode */
 	int dvi_mode;
+
+	struct mutex mutex;
+	int color_range;
 };
 
 struct hdmi_conf {
@@ -341,6 +354,7 @@ int hdmi_conf_apply(struct hdmi_device *hdmi_dev);
 int is_hdmiphy_ready(struct hdmi_device *hdev);
 void hdmi_enable(struct hdmi_device *hdev, int on);
 void hdmi_hpd_enable(struct hdmi_device *hdev, int on);
+void hdmi_hpd_clear_int(struct hdmi_device *hdev);
 void hdmi_tg_enable(struct hdmi_device *hdev, int on);
 void hdmi_reg_stop_vsi(struct hdmi_device *hdev);
 void hdmi_reg_infoframe(struct hdmi_device *hdev,
@@ -362,6 +376,7 @@ void hdmi_sw_reset(struct hdmi_device *hdev);
 void hdmi_dumpregs(struct hdmi_device *hdev, char *prefix);
 void hdmi_set_3d_info(struct hdmi_device *hdev);
 void hdmi_set_dvi_mode(struct hdmi_device *hdev);
+void hdmi_debugfs_init(struct hdmi_device *hdev);
 
 /** HDCP functions */
 irqreturn_t hdcp_irq_handler(struct hdmi_device *hdev);
@@ -370,6 +385,13 @@ int hdcp_start(struct hdmi_device *hdev);
 int hdcp_prepare(struct hdmi_device *hdev);
 int hdcp_i2c_read(struct hdmi_device *hdev, u8 offset, int bytes, u8 *buf);
 int hdcp_i2c_write(struct hdmi_device *hdev, u8 offset, int bytes, u8 *buf);
+
+/** EDID functions */
+int edid_update(struct hdmi_device *hdev);
+u32 edid_enum_presets(struct hdmi_device *hdev, int index);
+u32 edid_preferred_preset(struct hdmi_device *hdev);
+bool edid_supports_hdmi(struct hdmi_device *hdev);
+int edid_max_audio_channels(struct hdmi_device *hdev);
 
 static inline
 void hdmi_write(struct hdmi_device *hdev, u32 reg_id, u32 value)

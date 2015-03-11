@@ -131,7 +131,8 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 				layer = sub_mxr->layer[MXR_LAYER_VIDEO];
 				layer->pipe.state = MXR_PIPELINE_STREAMING;
 				mxr_layer_geo_fix(layer);
-				layer->ops.format_set(layer);
+				layer->ops.format_set(layer, layer->fmt,
+							    &layer->geo);
 				layer->ops.stream_set(layer, 1);
 				local += sub_mxr->local;
 			}
@@ -147,6 +148,7 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 	/* Alpha blending configuration always can be changed
 	 * whenever streaming */
 	mxr_set_alpha_blend(mdev);
+	mxr_reg_set_color_range(mdev);
 	mxr_reg_set_layer_prio(mdev);
 
 	if ((mdev->n_streamer == 1 && local == 1) ||
@@ -210,7 +212,7 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 			goto out;
 		}
 
-		ret = mxr_reg_wait4vsync(mdev);
+		ret = mxr_reg_wait4update(mdev);
 		if (ret) {
 			mxr_err(mdev, "failed to get vsync (%d) from output\n",
 					ret);
@@ -275,7 +277,7 @@ static int mxr_streamer_put(struct mxr_device *mdev, struct v4l2_subdev *sd)
 
 		mxr_reg_streamoff(mdev);
 		/* vsync applies Mixer setup */
-		ret = mxr_reg_wait4vsync(mdev);
+		ret = mxr_reg_wait4update(mdev);
 		if (ret) {
 			mxr_err(mdev, "failed to get vsync (%d) from output\n",
 					ret);
@@ -1392,6 +1394,7 @@ static int __devinit mxr_probe(struct platform_device *pdev)
 
 	/* setup pointer to master device */
 	mdev->dev = dev;
+	mdev->color_range = 3;
 
 	/* use only sub mixer0 as default */
 	mdev->sub_mxr[MXR_SUB_MIXER0].use = 1;
@@ -1406,7 +1409,14 @@ static int __devinit mxr_probe(struct platform_device *pdev)
 	mutex_init(&mdev->mutex);
 	mutex_init(&mdev->s_mutex);
 	spin_lock_init(&mdev->reg_slock);
-	init_waitqueue_head(&mdev->event_queue);
+	init_waitqueue_head(&mdev->vsync_wait);
+
+	mdev->update_wq = create_singlethread_workqueue("hdmi-mixer");
+	if (mdev->update_wq == NULL) {
+		ret = -ENOMEM;
+		mxr_err(mdev, "failed to create work queue\n");
+		goto fail_mem;
+	}
 
 	/* acquire resources: regs, irqs, clocks, regulators */
 	ret = mxr_acquire_resources(mdev, pdev);
@@ -1455,6 +1465,8 @@ fail_resources:
 	mxr_release_resources(mdev);
 
 fail_mem:
+	if (mdev->update_wq)
+		destroy_workqueue(mdev->update_wq);
 	kfree(mdev);
 
 fail:
@@ -1469,6 +1481,7 @@ static int __devexit mxr_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(dev);
 
+	destroy_workqueue(mdev->update_wq);
 	mxr_release_layers(mdev);
 	mxr_release_video(mdev);
 	mxr_release_resources(mdev);
