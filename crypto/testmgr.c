@@ -30,21 +30,13 @@
 
 #include "internal.h"
 
-#ifndef CONFIG_CRYPTO_MANAGER_TESTS
+#ifdef CONFIG_CRYPTO_MANAGER_DISABLE_TESTS
 
 /* a perfect nop */
 int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
 {
 	return 0;
 }
-
-#ifdef CONFIG_CRYPTO_FIPS
-bool in_fips_err()
-{
-	return false;
-}
-EXPORT_SYMBOL_GPL(in_fips_err);
-#endif
 
 #else
 
@@ -72,12 +64,6 @@ EXPORT_SYMBOL_GPL(in_fips_err);
 */
 #define ENCRYPT 1
 #define DECRYPT 0
-
-#ifdef CONFIG_CRYPTO_FIPS
-#define FIPS_ERR 1
-#define FIPS_NO_ERR 0
-static int IN_FIPS_ERROR = FIPS_NO_ERR;
-#endif
 
 struct tcrypt_result {
 	struct completion completion;
@@ -139,19 +125,6 @@ struct alg_test_desc {
 };
 
 static unsigned int IDX[8] = { IDX1, IDX2, IDX3, IDX4, IDX5, IDX6, IDX7, IDX8 };
-
-#ifdef CONFIG_CRYPTO_FIPS
-bool in_fips_err()
-{
-	return (IN_FIPS_ERROR == FIPS_ERR);
-}
-EXPORT_SYMBOL_GPL(in_fips_err);
-
-void set_in_fips_err()
-{
-	IN_FIPS_ERROR = FIPS_ERR;
-}
-#endif
 
 static void hexdump(unsigned char *buf, unsigned int len)
 {
@@ -1561,6 +1534,21 @@ static int alg_test_null(const struct alg_test_desc *desc,
 /* Please keep this list sorted by algorithm name. */
 static const struct alg_test_desc alg_test_descs[] = {
 	{
+		.alg = "__cbc-serpent-sse2",
+		.test = alg_test_null,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = NULL,
+					.count = 0
+				},
+				.dec = {
+					.vecs = NULL,
+					.count = 0
+				}
+			}
+		}
+	}, {
 		.alg = "__driver-cbc-aes-aesni",
 		.test = alg_test_null,
 		.suite = {
@@ -1576,7 +1564,37 @@ static const struct alg_test_desc alg_test_descs[] = {
 			}
 		}
 	}, {
+		.alg = "__driver-cbc-serpent-sse2",
+		.test = alg_test_null,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = NULL,
+					.count = 0
+				},
+				.dec = {
+					.vecs = NULL,
+					.count = 0
+				}
+			}
+		}
+	}, {
 		.alg = "__driver-ecb-aes-aesni",
+		.test = alg_test_null,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = NULL,
+					.count = 0
+				},
+				.dec = {
+					.vecs = NULL,
+					.count = 0
+				}
+			}
+		}
+	}, {
+		.alg = "__driver-ecb-serpent-sse2",
 		.test = alg_test_null,
 		.suite = {
 			.cipher = {
@@ -1702,6 +1720,21 @@ static const struct alg_test_desc alg_test_descs[] = {
 			}
 		}
 	}, {
+		.alg = "cbc(serpent)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = serpent_cbc_enc_tv_template,
+					.count = SERPENT_CBC_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = serpent_cbc_dec_tv_template,
+					.count = SERPENT_CBC_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
 		.alg = "cbc(twofish)",
 		.test = alg_test_skcipher,
 		.suite = {
@@ -1719,9 +1752,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 		.alg = "ccm(aes)",
 		.test = alg_test_aead,
-#ifdef CONFIG_CRYPTO_CCM
 		.fips_allowed = 1,
-#endif
 		.suite = {
 			.aead = {
 				.enc = {
@@ -1760,6 +1791,21 @@ static const struct alg_test_desc alg_test_descs[] = {
 			}
 		}
 	}, {
+		.alg = "cryptd(__driver-ecb-serpent-sse2)",
+		.test = alg_test_null,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = NULL,
+					.count = 0
+				},
+				.dec = {
+					.vecs = NULL,
+					.count = 0
+				}
+			}
+		}
+	}, {
 		.alg = "cryptd(__ghash-pclmulqdqni)",
 		.test = alg_test_null,
 		.suite = {
@@ -1781,6 +1827,66 @@ static const struct alg_test_desc alg_test_descs[] = {
 				.dec = {
 					.vecs = aes_ctr_dec_tv_template,
 					.count = AES_CTR_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+		.alg = "ctr(blowfish)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = bf_ctr_enc_tv_template,
+					.count = BF_CTR_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = bf_ctr_dec_tv_template,
+					.count = BF_CTR_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+		.alg = "ctr(camellia)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = camellia_ctr_enc_tv_template,
+					.count = CAMELLIA_CTR_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = camellia_ctr_dec_tv_template,
+					.count = CAMELLIA_CTR_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+		.alg = "ctr(serpent)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = serpent_ctr_enc_tv_template,
+					.count = SERPENT_CTR_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = serpent_ctr_dec_tv_template,
+					.count = SERPENT_CTR_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+		.alg = "ctr(twofish)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = tf_ctr_enc_tv_template,
+					.count = TF_CTR_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = tf_ctr_dec_tv_template,
+					.count = TF_CTR_DEC_TEST_VECTORS
 				}
 			}
 		}
@@ -2090,9 +2196,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 		.alg = "gcm(aes)",
 		.test = alg_test_aead,
-#ifdef CONFIG_CRYPTO_GCM
 		.fips_allowed = 1,
-#endif
 		.suite = {
 			.aead = {
 				.enc = {
@@ -2108,6 +2212,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 		.alg = "ghash",
 		.test = alg_test_hash,
+		.fips_allowed = 1,
 		.suite = {
 			.hash = {
 				.vecs = ghash_tv_template,
@@ -2207,6 +2312,51 @@ static const struct alg_test_desc alg_test_descs[] = {
 			}
 		}
 	}, {
+		.alg = "lrw(camellia)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = camellia_lrw_enc_tv_template,
+					.count = CAMELLIA_LRW_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = camellia_lrw_dec_tv_template,
+					.count = CAMELLIA_LRW_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+		.alg = "lrw(serpent)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = serpent_lrw_enc_tv_template,
+					.count = SERPENT_LRW_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = serpent_lrw_dec_tv_template,
+					.count = SERPENT_LRW_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+		.alg = "lrw(twofish)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = tf_lrw_enc_tv_template,
+					.count = TF_LRW_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = tf_lrw_dec_tv_template,
+					.count = TF_LRW_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
 		.alg = "lzo",
 		.test = alg_test_comp,
 		.suite = {
@@ -2298,9 +2448,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 		.alg = "rfc4106(gcm(aes))",
 		.test = alg_test_aead,
-#ifdef CONFIG_CRYPTO_GCM
-		.fips_allowed = 1,
-#endif
 		.suite = {
 			.aead = {
 				.enc = {
@@ -2318,9 +2465,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 
 		.alg = "rfc4309(ccm(aes))",
 		.test = alg_test_aead,
-#ifdef CONFIG_CRYPTO_CCM
 		.fips_allowed = 1,
-#endif
 		.suite = {
 			.aead = {
 				.enc = {
@@ -2519,6 +2664,51 @@ static const struct alg_test_desc alg_test_descs[] = {
 			}
 		}
 	}, {
+		.alg = "xts(camellia)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = camellia_xts_enc_tv_template,
+					.count = CAMELLIA_XTS_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = camellia_xts_dec_tv_template,
+					.count = CAMELLIA_XTS_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+		.alg = "xts(serpent)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = serpent_xts_enc_tv_template,
+					.count = SERPENT_XTS_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = serpent_xts_dec_tv_template,
+					.count = SERPENT_XTS_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+		.alg = "xts(twofish)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = tf_xts_enc_tv_template,
+					.count = TF_XTS_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = tf_xts_dec_tv_template,
+					.count = TF_XTS_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
 		.alg = "zlib",
 		.test = alg_test_pcomp,
 		.suite = {
@@ -2565,10 +2755,7 @@ int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
 {
 	int i;
 	int j;
-	int rc = 0;
-#ifdef CONFIG_CRYPTO_FIPS
-	fips_enabled = 1;
-#endif
+	int rc;
 
 	if ((type & CRYPTO_ALG_TYPE_MASK) == CRYPTO_ALG_TYPE_CIPHER) {
 		char nalg[CRYPTO_MAX_ALG_NAME];
@@ -2593,6 +2780,11 @@ int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
 	if (i < 0 && j < 0)
 		goto notest;
 
+	if (fips_enabled && ((i >= 0 && !alg_test_descs[i].fips_allowed) ||
+			     (j >= 0 && !alg_test_descs[j].fips_allowed)))
+		goto non_fips_alg;
+
+	rc = 0;
 	if (i >= 0)
 		rc |= alg_test_descs[i].test(alg_test_descs + i, driver,
 					     type, mask);
@@ -2600,52 +2792,23 @@ int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
 		rc |= alg_test_descs[j].test(alg_test_descs + j, driver,
 					     type, mask);
 
-	if (fips_enabled && ((i >= 0 && !alg_test_descs[i].fips_allowed) ||
-			     (j >= 0 && !alg_test_descs[j].fips_allowed)))
-		goto non_fips_alg;
-
 test_done:
-	if (fips_enabled && rc) {
-		printk(KERN_INFO
-			"FIPS: %s: %s alg self test failed\n",
-			driver, alg);
-#ifdef CONFIG_CRYPTO_FIPS
-		IN_FIPS_ERROR = FIPS_ERR;
-#endif
-		return rc;
-	}
+	if (fips_enabled && rc)
+		panic("%s: %s alg self test failed in fips mode!\n", driver, alg);
 
 	if (fips_enabled && !rc)
-		printk(KERN_INFO "FIPS: self-tests for %s (%s) passed\n",
-			driver, alg);
+		printk(KERN_INFO "alg: self-tests for %s (%s) passed\n",
+		       driver, alg);
 
 	return rc;
 
 notest:
-	printk(KERN_INFO "FIPS: No test for %s (%s)\n", alg, driver);
+	printk(KERN_INFO "alg: No test for %s (%s)\n", alg, driver);
 	return 0;
 non_fips_alg:
-	if (!rc)
-		printk(KERN_INFO
-			"FIPS: self-tests for non-FIPS %s (%s) passed\n",
-			driver, alg);
-	else
-		printk(KERN_INFO
-			"FIPS: self-tests for non-FIPS %s (%s) failed\n",
-			alg, driver);
-	return rc;
+	return -EINVAL;
 }
 
-int testmgr_crypto_proc_init(void)
-{
-#ifdef CONFIG_CRYPTO_FIPS
-	crypto_init_proc(&IN_FIPS_ERROR);
-#else
-	crypto_init_proc();
-#endif
-	return 0;
-}
-
-#endif /* CONFIG_CRYPTO_MANAGER_TESTS */
+#endif /* CONFIG_CRYPTO_MANAGER_DISABLE_TESTS */
 
 EXPORT_SYMBOL_GPL(alg_test);

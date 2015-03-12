@@ -1,7 +1,5 @@
 menu "Device Drivers"
 
-source "drivers/gpu/mali400/Kconfig"
-
 source "drivers/base/Kconfig"
 
 source "drivers/connector/Kconfig"
@@ -42,8 +40,6 @@ source "drivers/net/Kconfig"
 
 source "drivers/isdn/Kconfig"
 
-source "drivers/telephony/Kconfig"
-
 # input before char - char/joystick depends on it. As does USB.
 
 source "drivers/input/Kconfig"
@@ -54,15 +50,17 @@ source "drivers/i2c/Kconfig"
 
 source "drivers/spi/Kconfig"
 
+source "drivers/hsi/Kconfig"
+
 source "drivers/pps/Kconfig"
 
 source "drivers/ptp/Kconfig"
 
+source "drivers/pinctrl/Kconfig"
+
 source "drivers/gpio/Kconfig"
 
 source "drivers/w1/Kconfig"
-
-source "drivers/battery/Kconfig"
 
 source "drivers/power/Kconfig"
 
@@ -98,8 +96,6 @@ source "drivers/memstick/Kconfig"
 
 source "drivers/leds/Kconfig"
 
-source "drivers/nfc/Kconfig"
-
 source "drivers/switch/Kconfig"
 
 source "drivers/accessibility/Kconfig"
@@ -120,6 +116,10 @@ source "drivers/uio/Kconfig"
 
 source "drivers/vlynq/Kconfig"
 
+source "drivers/virtio/Kconfig"
+
+source "drivers/hv/Kconfig"
+
 source "drivers/xen/Kconfig"
 
 source "drivers/staging/Kconfig"
@@ -132,39 +132,18 @@ source "drivers/hwspinlock/Kconfig"
 
 source "drivers/clocksource/Kconfig"
 
-source "drivers/motor/Kconfig"
+source "drivers/iommu/Kconfig"
 
-source "drivers/samsung/Kconfig"
+source "drivers/remoteproc/Kconfig"
 
-source "drivers/sensor/Kconfig"
+source "drivers/rpmsg/Kconfig"
 
-source "drivers/sensorhub/Kconfig"
+source "drivers/virt/Kconfig"
 
 source "drivers/devfreq/Kconfig"
 
-source "drivers/phone_svn/Kconfig"
+source "drivers/nfc/Kconfig"
 
-source "drivers/svnet/Kconfig"
-
-source "drivers/accessory/Kconfig"
-
-source "drivers/irda/Kconfig"
-
-source "drivers/extcon/Kconfig"
-
-source "drivers/barcode_emul/Kconfig"
-
-source "drivers/dpram/Kconfig"
-
-# Secure OS Mobicore
 source "drivers/gud/Kconfig"
-
-source "drivers/iommu/Kconfig"
-
-# FELICA
-source "drivers/felica/Kconfig"
-
-# Authentec
-source "drivers/interceptor/Kconfig"
 
 endmenu

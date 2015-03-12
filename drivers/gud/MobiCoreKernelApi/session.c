@@ -1,202 +1,224 @@
 /** @addtogroup MCD_IMPL_LIB
  * @{
  * @file
- * <!-- Copyright Giesecke & Devrient GmbH 2009 - 2011 -->
+ * <!-- Copyright Giesecke & Devrient GmbH 2009 - 2012 -->
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #include <linux/types.h>
 #include <linux/slab.h>
-#include "mcKernelApi.h"
-#include "public/MobiCoreDriverApi.h"
+#include "mc_kernel_api.h"
+#include "public/mobicore_driver_api.h"
 
 #include "session.h"
 
-//------------------------------------------------------------------------------
-bulkBufferDescriptor_t* bulkBufferDescriptor_create(
-    addr_t    virtAddr,
-    uint32_t  len,
-    uint32_t  handle,
-    addr_t    physAddrWsmL2
+/*****************************************************************************/
+struct bulk_buffer_descriptor *bulk_buffer_descriptor_create(
+	void		*virt_addr,
+	uint32_t	len,
+	uint32_t	handle,
+	void		*phys_addr_wsm_l2
 ) {
-	bulkBufferDescriptor_t *desc = kzalloc(sizeof(bulkBufferDescriptor_t),
-											GFP_KERNEL);
-	desc->virtAddr = virtAddr;
+	struct bulk_buffer_descriptor *desc =
+		kzalloc(sizeof(struct bulk_buffer_descriptor), GFP_KERNEL);
+	desc->virt_addr = virt_addr;
 	desc->len = len;
 	desc->handle = handle;
-	desc->physAddrWsmL2 = physAddrWsmL2;
+	desc->phys_addr_wsm_l2 = phys_addr_wsm_l2;
 	return desc;
 }
 
-//------------------------------------------------------------------------------
-session_t *session_create(
-    uint32_t     sessionId,
-    void       *pInstance,
-    connection_t *connection
+/*****************************************************************************/
+struct session *session_create(
+	uint32_t	session_id,
+	void		*instance,
+	struct connection *connection
 ) {
-	session_t *session = kzalloc(sizeof(session_t), GFP_KERNEL);
-	session->sessionId = sessionId;
-	session->pInstance = pInstance;
-	session->notificationConnection = connection;
+	struct session *session =
+			kzalloc(sizeof(struct session), GFP_KERNEL);
+	session->session_id = session_id;
+	session->instance = instance;
+	session->notification_connection = connection;
 
-	session->sessionInfo.lastErr = SESSION_ERR_NO;
-	session->sessionInfo.state = SESSION_STATE_INITIAL;
+	session->session_info.last_error = SESSION_ERR_NO;
+	session->session_info.state = SESSION_STATE_INITIAL;
 
-	INIT_LIST_HEAD(&(session->bulkBufferDescriptors));
+	INIT_LIST_HEAD(&(session->bulk_buffer_descriptors));
 	return session;
 }
 
 
-//------------------------------------------------------------------------------
+/*****************************************************************************/
 void session_cleanup(
-    session_t *session
+	struct session *session
 ) {
-	bulkBufferDescriptor_t  *pBlkBufDescr;
+	struct bulk_buffer_descriptor  *bulk_buf_descr;
 	struct list_head *pos, *q;
 
-	// Unmap still mapped buffers
-	list_for_each_safe(pos, q, &session->bulkBufferDescriptors) {
-		pBlkBufDescr=list_entry(pos, bulkBufferDescriptor_t, list);
+	/* Unmap still mapped buffers */
+	list_for_each_safe(pos, q, &session->bulk_buffer_descriptors) {
+		bulk_buf_descr =
+			list_entry(pos, struct bulk_buffer_descriptor, list);
 
-		MCDRV_DBG_VERBOSE("Physical Address of L2 Table = 0x%X, handle= %d",
-				(unsigned int)pBlkBufDescr->physAddrWsmL2,
-				pBlkBufDescr->handle);
+		MCDRV_DBG_VERBOSE("Physical Address of L2 Table = 0x%X, "
+				"handle= %d",
+				(unsigned int)bulk_buf_descr->phys_addr_wsm_l2,
+				bulk_buf_descr->handle);
 
-		// ignore any error, as we cannot do anything in this case.
-		int ret = mobicore_unmap_vmem(session->pInstance,
-										pBlkBufDescr->handle);
-		if (0 != ret)
-		{
-			MCDRV_DBG_ERROR("mobicore_unmap_vmem failed: %d",ret);
-		}
+		/* ignore any error, as we cannot do anything in this case. */
+		int ret = mobicore_unmap_vmem(session->instance,
+						bulk_buf_descr->handle);
+		if (ret != 0)
+			MCDRV_DBG_ERROR("mobicore_unmap_vmem failed: %d", ret);
 
 		list_del(pos);
-		kfree(pBlkBufDescr);
+		kfree(bulk_buf_descr);
 	}
 
-	// Finally delete notification connection
-	connection_cleanup(session->notificationConnection);
+	/* Finally delete notification connection */
+	connection_cleanup(session->notification_connection);
 	kfree(session);
 }
 
 
-//------------------------------------------------------------------------------
-void session_setErrorInfo(
-    session_t *session,
-    int32_t   err
+/*****************************************************************************/
+void session_set_error_info(
+	struct session *session,
+	int32_t   err
 ) {
-	session->sessionInfo.lastErr = err;
+	session->session_info.last_error = err;
 }
 
 
-//------------------------------------------------------------------------------
-int32_t session_getLastErr(
-    session_t *session
+/*****************************************************************************/
+int32_t session_get_last_err(
+	struct session *session
 ) {
-	return session->sessionInfo.lastErr;
+	return session->session_info.last_error;
 }
 
 
-//------------------------------------------------------------------------------
-bulkBufferDescriptor_t* session_addBulkBuf(
-    session_t	*session,
-    addr_t		buf,
-    uint32_t	len
+/*****************************************************************************/
+struct bulk_buffer_descriptor *session_add_bulk_buf(
+	struct session	*session,
+	void		*buf,
+	uint32_t	len
 ) {
-	bulkBufferDescriptor_t* blkBufDescr = NULL;
-	bulkBufferDescriptor_t  *tmp;
+	struct bulk_buffer_descriptor *bulk_buf_descr = NULL;
+	struct bulk_buffer_descriptor  *tmp;
 	struct list_head *pos;
 
-	// Search bulk buffer descriptors for existing vAddr
-	// At the moment a virtual address can only be added one time
-	list_for_each(pos, &session->bulkBufferDescriptors) {
-		tmp=list_entry(pos, bulkBufferDescriptor_t, list);
-		if (tmp->virtAddr == buf)
-		{
+	/* Search bulk buffer descriptors for existing vAddr
+	   At the moment a virtual address can only be added one time */
+	list_for_each(pos, &session->bulk_buffer_descriptors) {
+		tmp = list_entry(pos, struct bulk_buffer_descriptor, list);
+		if (tmp->virt_addr == buf)
 			return NULL;
-		}
 	}
 
-	do
-	{
-		// Prepare the interface structure for memory registration in
-		// Kernel Module
-		addr_t    pPhysWsmL2;
-		uint32_t  handle;
+	do {
+		/* Prepare the interface structure for memory registration in
+		   Kernel Module */
+		uint32_t l2_table_phys;
+		uint32_t handle;
 
-		int ret = mobicore_map_vmem(session->pInstance,
-									buf,
-									len,
-									&handle,
-									&pPhysWsmL2);
+		int ret = mobicore_map_vmem(session->instance,
+					buf,
+					len,
+					&handle,
+					&l2_table_phys);
 
-		if (0 != ret) {
-			MCDRV_DBG_ERROR("mobicore_map_vmem failed, ret=%d",ret);
+		if (ret != 0) {
+			MCDRV_DBG_ERROR("mobicore_map_vmem failed, ret=%d",
+					ret);
 			break;
 		}
 
-		MCDRV_DBG_VERBOSE("Physical Address of L2 Table = 0x%X, handle=%d",
-				(unsigned int)pPhysWsmL2,
+		MCDRV_DBG_VERBOSE("Physical Address of L2 Table = 0x%X, "
+				"handle=%d",
+				(unsigned int)l2_table_phys,
 				handle);
 
-		// Create new descriptor
-		blkBufDescr = bulkBufferDescriptor_create(
+		/* Create new descriptor */
+		bulk_buf_descr = bulk_buffer_descriptor_create(
 							buf,
 							len,
 							handle,
-							pPhysWsmL2);
+							(void*)l2_table_phys);
 
-		// Add to vector of descriptors
-		list_add_tail(&(blkBufDescr->list), &(session->bulkBufferDescriptors));
+		/* Add to vector of descriptors */
+		list_add_tail(&(bulk_buf_descr->list),
+			&(session->bulk_buffer_descriptors));
 	} while (0);
 
-	return blkBufDescr;
+	return bulk_buf_descr;
 }
 
 
-//------------------------------------------------------------------------------
-bool session_removeBulkBuf(
-    session_t *session,
-    addr_t    virtAddr
+/*****************************************************************************/
+bool session_remove_bulk_buf(
+	struct session *session,
+	void	*virt_addr
 ) {
 	bool ret = true;
-	bulkBufferDescriptor_t  *pBlkBufDescr = NULL;
-	bulkBufferDescriptor_t  *tmp;
+	struct bulk_buffer_descriptor  *bulk_buf_descr = NULL;
+	struct bulk_buffer_descriptor  *tmp;
 	struct list_head *pos, *q;
 
-	MCDRV_DBG_VERBOSE("Virtual Address = 0x%X", (unsigned int) virtAddr);
+	MCDRV_DBG_VERBOSE("Virtual Address = 0x%X", (unsigned int) virt_addr);
 
-	// Search and remove bulk buffer descriptor
-	list_for_each_safe(pos, q, &session->bulkBufferDescriptors) {
-		tmp=list_entry(pos, bulkBufferDescriptor_t, list);
-		if (tmp->virtAddr == virtAddr)
-		{
-			pBlkBufDescr = tmp;
+	/* Search and remove bulk buffer descriptor */
+	list_for_each_safe(pos, q, &session->bulk_buffer_descriptors) {
+		tmp = list_entry(pos, struct bulk_buffer_descriptor, list);
+		if (tmp->virt_addr == virt_addr) {
+			bulk_buf_descr = tmp;
 			list_del(pos);
 			break;
 		}
 	}
 
-	if (NULL == pBlkBufDescr)
-	{
+	if (bulk_buf_descr == NULL) {
 		MCDRV_DBG_ERROR("Virtual Address not found");
 		ret = false;
-	}
-	else
-	{
+	} else {
 		MCDRV_DBG_VERBOSE("WsmL2 phys=0x%X, handle=%d",
-				(unsigned int)pBlkBufDescr->physAddrWsmL2, pBlkBufDescr->handle);
+			(unsigned int)bulk_buf_descr->phys_addr_wsm_l2,
+			bulk_buf_descr->handle);
 
-		// ignore any error, as we cannot do anything
-		int ret = mobicore_unmap_vmem(session->pInstance,
-										pBlkBufDescr->handle);
-		if (0 != ret)
-		{
-			MCDRV_DBG_ERROR("mobicore_unmap_vmem failed: %d",ret);
-		}
+		/* ignore any error, as we cannot do anything */
+		int ret = mobicore_unmap_vmem(session->instance,
+						bulk_buf_descr->handle);
+		if (ret != 0)
+			MCDRV_DBG_ERROR("mobicore_unmap_vmem failed: %d", ret);
 
-		kfree(pBlkBufDescr);
+		kfree(bulk_buf_descr);
 	}
 
 	return ret;
+}
+
+/*****************************************************************************/
+uint32_t session_find_bulk_buf(
+	struct session *session,
+	void	*virt_addr
+) {
+	struct bulk_buffer_descriptor  *tmp;
+	struct list_head *pos, *q;
+
+	MCDRV_DBG_VERBOSE("Virtual Address = 0x%X", (unsigned int) virt_addr);
+
+	/* Search and return buffer descriptor handle */
+	list_for_each_safe(pos, q, &session->bulk_buffer_descriptors) {
+		tmp = list_entry(pos, struct bulk_buffer_descriptor, list);
+		if (tmp->virt_addr == virt_addr) {
+			return tmp->handle;
+		}
+	}
+
+
+	return 0;
 }
 
 /** @} */

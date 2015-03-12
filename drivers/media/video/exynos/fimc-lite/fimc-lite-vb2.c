@@ -19,10 +19,7 @@ void *flite_cma_init(struct flite_dev *flite)
 	return vb2_cma_phys_init(&flite->pdev->dev, NULL, 0, false);
 }
 
-int flite_cma_resume(void *alloc_ctx)
-{
-	return 1;
-}
+int flite_cma_resume(void *alloc_ctx) {}
 void flite_cma_suspend(void *alloc_ctx) {}
 void flite_cma_set_cacheable(void *alloc_ctx, bool cacheable) {}
 

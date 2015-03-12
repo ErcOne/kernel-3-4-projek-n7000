@@ -2,6 +2,7 @@
 #define _LINUX_INIT_H
 
 #include <linux/compiler.h>
+#include <linux/types.h>
 
 /* These macros are used to mark some functions or 
  * initialized data (doesn't apply to uninitialized data)
@@ -156,7 +157,7 @@ void prepare_namespace(void);
 
 extern void (*late_time_init)(void);
 
-extern int initcall_debug;
+extern bool initcall_debug;
 
 #endif
   
@@ -199,10 +200,6 @@ extern int initcall_debug;
 #define postcore_initcall_sync(fn)	__define_initcall("2s",fn,2s)
 #define arch_initcall(fn)		__define_initcall("3",fn,3)
 #define arch_initcall_sync(fn)		__define_initcall("3s",fn,3s)
-#ifdef CONFIG_FAST_RESUME
-#define beforeresume_initcall(fn)	__define_initcall("bresume",fn,bresume)
-#define resume_initcall(fn)		__define_initcall("resume",fn,resume)
-#endif
 #define subsys_initcall(fn)		__define_initcall("4",fn,4)
 #define subsys_initcall_sync(fn)	__define_initcall("4s",fn,4s)
 #define fs_initcall(fn)			__define_initcall("5",fn,5)

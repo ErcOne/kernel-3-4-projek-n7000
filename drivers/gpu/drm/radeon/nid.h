@@ -42,6 +42,10 @@
 #define CAYMAN_MAX_TCC_MASK          0xFF
 
 #define DMIF_ADDR_CONFIG  				0xBD4
+
+/* DCE6 only */
+#define DMIF_ADDR_CALC  				0xC00
+
 #define	SRBM_GFX_CNTL				        0x0E44
 #define		RINGID(x)					(((x) & 0x3) << 0)
 #define		VMID(x)						(((x) & 0x7) << 0)
@@ -106,6 +110,7 @@
 #define		SYSTEM_ACCESS_MODE_NOT_IN_SYS			(3 << 3)
 #define		SYSTEM_APERTURE_UNMAPPED_ACCESS_PASS_THRU	(0 << 5)
 #define		ENABLE_ADVANCED_DRIVER_MODEL			(1 << 6)
+#define	FUS_MC_VM_FB_OFFSET				0x2068
 
 #define MC_SHARED_BLACKOUT_CNTL           		0x20ac
 #define	MC_ARB_RAMCFG					0x2760

@@ -17,24 +17,8 @@
 #include <linux/interrupt.h>
 #include <linux/workqueue.h>
 #include <linux/delay.h>
+#include <linux/export.h>
 #include <trace/events/asoc.h>
-
-#ifdef CONFIG_JACK_MON
-#include <linux/jack.h>
-#endif
-
-#ifdef CONFIG_SWITCH
-#include <linux/switch.h>
-#endif
-#include <linux/sec_jack.h>
-
-#ifdef CONFIG_SWITCH
-/* Android jack detection */
-static struct switch_dev android_switch = {
-	.name = "h2w",
-};
-#endif
-
 
 /**
  * snd_soc_jack_new - Create a new jack
@@ -56,10 +40,6 @@ int snd_soc_jack_new(struct snd_soc_codec *codec, const char *id, int type,
 	INIT_LIST_HEAD(&jack->pins);
 	INIT_LIST_HEAD(&jack->jack_zones);
 	BLOCKING_INIT_NOTIFIER_HEAD(&jack->notifier);
-
-#ifdef CONFIG_SWITCH
-	switch_dev_register(&android_switch);
-#endif
 
 	return snd_jack_new(codec->card->snd_card, id, type, &jack->jack);
 }
@@ -86,28 +66,6 @@ void snd_soc_jack_report(struct snd_soc_jack *jack, int status, int mask)
 	struct snd_soc_jack_pin *pin;
 	int enable;
 	int oldstatus;
-
-#ifdef CONFIG_SWITCH
-	if (mask & SND_JACK_HEADSET) {
-		if (status & SND_JACK_MICROPHONE)
-			switch_set_state(&android_switch, SEC_HEADSET_4POLE);
-		else if (status & SND_JACK_HEADPHONE)
-			switch_set_state(&android_switch, SEC_HEADSET_3POLE);
-		else
-			switch_set_state(&android_switch, SEC_JACK_NO_DEVICE);
-	}
-#endif
-
-#ifdef CONFIG_JACK_MON
-	if (mask & SND_JACK_HEADSET) {
-		if (status & SND_JACK_MICROPHONE)
-			jack_event_handler("earjack", SND_JACK_HEADSET);
-		else if (status & SND_JACK_HEADPHONE)
-			jack_event_handler("earjack", SND_JACK_HEADPHONE);
-		else
-			jack_event_handler("earjack", 0);
-	}
-#endif
 
 	trace_snd_soc_jack_report(jack, mask, status);
 
@@ -230,6 +188,8 @@ int snd_soc_jack_add_pins(struct snd_soc_jack *jack, int count,
 		INIT_LIST_HEAD(&pins[i].list);
 		list_add(&(pins[i].list), &jack->pins);
 	}
+
+	snd_soc_dapm_new_widgets(&jack->codec->card->dapm);
 
 	/* Update to reflect the last reported status; canned jack
 	 * implementations are likely to set their state before the
@@ -381,10 +341,8 @@ int snd_soc_jack_add_gpios(struct snd_soc_jack *jack, int count,
 					gpios[i].gpio, ret);
 		}
 
-#ifdef CONFIG_GPIO_SYSFS
 		/* Expose GPIO value over sysfs for diagnostic purposes */
 		gpio_export(gpios[i].gpio, false);
-#endif
 
 		/* Update initial jack status */
 		snd_soc_jack_gpio_detect(&gpios[i]);
@@ -416,9 +374,7 @@ void snd_soc_jack_free_gpios(struct snd_soc_jack *jack, int count,
 	int i;
 
 	for (i = 0; i < count; i++) {
-#ifdef CONFIG_GPIO_SYSFS
 		gpio_unexport(gpios[i].gpio);
-#endif
 		free_irq(gpio_to_irq(gpios[i].gpio), &gpios[i]);
 		cancel_delayed_work_sync(&gpios[i].work);
 		gpio_free(gpios[i].gpio);

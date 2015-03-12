@@ -49,6 +49,7 @@
 #define EVERGREEN_PM4_UCODE_SIZE 1376
 #define EVERGREEN_RLC_UCODE_SIZE 768
 #define CAYMAN_RLC_UCODE_SIZE 1024
+#define ARUBA_RLC_UCODE_SIZE 1536
 
 /* Firmware Names */
 MODULE_FIRMWARE("radeon/R600_pfp.bin");
@@ -1134,7 +1135,7 @@ static void r600_vram_gtt_location(struct radeon_device *rdev, struct radeon_mc 
 	}
 	if (rdev->flags & RADEON_IS_AGP) {
 		size_bf = mc->gtt_start;
-		size_af = 0xFFFFFFFF - mc->gtt_end + 1;
+		size_af = 0xFFFFFFFF - mc->gtt_end;
 		if (size_bf > size_af) {
 			if (mc->mc_vram_size > size_bf) {
 				dev_warn(rdev->dev, "limiting VRAM\n");
@@ -1148,7 +1149,7 @@ static void r600_vram_gtt_location(struct radeon_device *rdev, struct radeon_mc 
 				mc->real_vram_size = size_af;
 				mc->mc_vram_size = size_af;
 			}
-			mc->vram_start = mc->gtt_end;
+			mc->vram_start = mc->gtt_end + 1;
 		}
 		mc->vram_end = mc->vram_start + mc->mc_vram_size - 1;
 		dev_info(rdev->dev, "VRAM: %lluM 0x%08llX - 0x%08llX (%lluM used)\n",
@@ -1905,6 +1906,7 @@ void r600_gpu_init(struct radeon_device *rdev)
 	WREG32(PA_CL_ENHANCE, (CLIP_VTX_REORDER_ENA |
 			       NUM_CLIP_SEQ(3)));
 	WREG32(PA_SC_ENHANCE, FORCE_EOV_MAX_CLK_CNT(4095));
+	WREG32(VC_ENHANCE, 0);
 }
 
 
@@ -2468,6 +2470,12 @@ int r600_startup(struct radeon_device *rdev)
 	}
 
 	/* Enable IRQ */
+	if (!rdev->irq.installed) {
+		r = radeon_irq_kms_init(rdev);
+		if (r)
+			return r;
+	}
+
 	r = r600_irq_init(rdev);
 	if (r) {
 		DRM_ERROR("radeon: IH init failed (%d).\n", r);
@@ -2619,10 +2627,6 @@ int r600_init(struct radeon_device *rdev)
 		return r;
 	/* Memory manager */
 	r = radeon_bo_init(rdev);
-	if (r)
-		return r;
-
-	r = radeon_irq_kms_init(rdev);
 	if (r)
 		return r;
 
@@ -2778,7 +2782,7 @@ void r600_ih_ring_init(struct radeon_device *rdev, unsigned ring_size)
 	rdev->ih.rptr = 0;
 }
 
-static int r600_ih_ring_alloc(struct radeon_device *rdev)
+int r600_ih_ring_alloc(struct radeon_device *rdev)
 {
 	int r;
 
@@ -2814,7 +2818,7 @@ static int r600_ih_ring_alloc(struct radeon_device *rdev)
 	return 0;
 }
 
-static void r600_ih_ring_fini(struct radeon_device *rdev)
+void r600_ih_ring_fini(struct radeon_device *rdev)
 {
 	int r;
 	if (rdev->ih.ring_obj) {
@@ -2838,7 +2842,7 @@ void r600_rlc_stop(struct radeon_device *rdev)
 		/* r7xx asics need to soft reset RLC before halting */
 		WREG32(SRBM_SOFT_RESET, SOFT_RESET_RLC);
 		RREG32(SRBM_SOFT_RESET);
-		udelay(15000);
+		mdelay(15);
 		WREG32(SRBM_SOFT_RESET, 0);
 		RREG32(SRBM_SOFT_RESET);
 	}
@@ -2861,10 +2865,17 @@ static int r600_rlc_init(struct radeon_device *rdev)
 
 	r600_rlc_stop(rdev);
 
-	WREG32(RLC_HB_BASE, 0);
 	WREG32(RLC_HB_CNTL, 0);
-	WREG32(RLC_HB_RPTR, 0);
-	WREG32(RLC_HB_WPTR, 0);
+
+	if (rdev->family == CHIP_ARUBA) {
+		WREG32(TN_RLC_SAVE_AND_RESTORE_BASE, rdev->rlc.save_restore_gpu_addr >> 8);
+		WREG32(TN_RLC_CLEAR_STATE_RESTORE_BASE, rdev->rlc.clear_state_gpu_addr >> 8);
+	}
+	if (rdev->family <= CHIP_CAYMAN) {
+		WREG32(RLC_HB_BASE, 0);
+		WREG32(RLC_HB_RPTR, 0);
+		WREG32(RLC_HB_WPTR, 0);
+	}
 	if (rdev->family <= CHIP_CAICOS) {
 		WREG32(RLC_HB_WPTR_LSB_ADDR, 0);
 		WREG32(RLC_HB_WPTR_MSB_ADDR, 0);
@@ -2873,7 +2884,12 @@ static int r600_rlc_init(struct radeon_device *rdev)
 	WREG32(RLC_UCODE_CNTL, 0);
 
 	fw_data = (const __be32 *)rdev->rlc_fw->data;
-	if (rdev->family >= CHIP_CAYMAN) {
+	if (rdev->family >= CHIP_ARUBA) {
+		for (i = 0; i < ARUBA_RLC_UCODE_SIZE; i++) {
+			WREG32(RLC_UCODE_ADDR, i);
+			WREG32(RLC_UCODE_DATA, be32_to_cpup(fw_data++));
+		}
+	} else if (rdev->family >= CHIP_CAYMAN) {
 		for (i = 0; i < CAYMAN_RLC_UCODE_SIZE; i++) {
 			WREG32(RLC_UCODE_ADDR, i);
 			WREG32(RLC_UCODE_DATA, be32_to_cpup(fw_data++));

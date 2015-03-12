@@ -79,12 +79,12 @@ static void sync_timeline_free(struct kref *kref)
 		container_of(kref, struct sync_timeline, kref);
 	unsigned long flags;
 
-	if (obj->ops->release_obj)
-		obj->ops->release_obj(obj);
-
 	spin_lock_irqsave(&sync_timeline_list_lock, flags);
 	list_del(&obj->sync_timeline_list);
 	spin_unlock_irqrestore(&sync_timeline_list_lock, flags);
+
+	if (obj->ops->release_obj)
+		obj->ops->release_obj(obj);
 
 	kfree(obj);
 }
@@ -92,14 +92,14 @@ static void sync_timeline_free(struct kref *kref)
 void sync_timeline_destroy(struct sync_timeline *obj)
 {
 	obj->destroyed = true;
+	smp_wmb();
 
 	/*
-	 * If this is not the last reference, signal any children
-	 * that their parent is going away.
+	 * signal any children that their parent is going away.
 	 */
+	sync_timeline_signal(obj);
 
-	if (!kref_put(&obj->kref, sync_timeline_free))
-		sync_timeline_signal(obj);
+	kref_put(&obj->kref, sync_timeline_free);
 }
 EXPORT_SYMBOL(sync_timeline_destroy);
 
@@ -312,40 +312,65 @@ EXPORT_SYMBOL(sync_fence_create);
 
 static int sync_fence_copy_pts(struct sync_fence *dst, struct sync_fence *src)
 {
-	struct list_head *pos, *test_pos;
+	struct list_head *pos;
 
 	list_for_each(pos, &src->pt_list_head) {
 		struct sync_pt *orig_pt =
 			container_of(pos, struct sync_pt, pt_list);
-		struct sync_pt *new_pt;
-
-		/* Skip already signaled points */
-		if (1 == orig_pt->status)
-			continue;
-
-		list_for_each(test_pos, &src->pt_list_head) {
-			struct sync_pt *test_pt =
-				container_of(pos, struct sync_pt, pt_list);
-			if (orig_pt->parent == test_pt->parent) {
-				int diff;
-				diff = orig_pt->parent->ops->compare(orig_pt,
-								     test_pt);
-				if (diff == -1) {
-					/* Skip orig_pt; another point will
-					 * signal after it */
-					continue;
-				}
-				break;
-			}
-		}
-
-		new_pt = sync_pt_dup(orig_pt);
+		struct sync_pt *new_pt = sync_pt_dup(orig_pt);
 
 		if (new_pt == NULL)
 			return -ENOMEM;
 
 		new_pt->fence = dst;
 		list_add(&new_pt->pt_list, &dst->pt_list_head);
+	}
+
+	return 0;
+}
+
+static int sync_fence_merge_pts(struct sync_fence *dst, struct sync_fence *src)
+{
+	struct list_head *src_pos, *dst_pos, *n;
+
+	list_for_each(src_pos, &src->pt_list_head) {
+		struct sync_pt *src_pt =
+			container_of(src_pos, struct sync_pt, pt_list);
+		bool collapsed = false;
+
+		list_for_each_safe(dst_pos, n, &dst->pt_list_head) {
+			struct sync_pt *dst_pt =
+				container_of(dst_pos, struct sync_pt, pt_list);
+			/* collapse two sync_pts on the same timeline
+			 * to a single sync_pt that will signal at
+			 * the later of the two
+			 */
+			if (dst_pt->parent == src_pt->parent) {
+				if (dst_pt->parent->ops->compare(dst_pt, src_pt) == -1) {
+					struct sync_pt *new_pt =
+						sync_pt_dup(src_pt);
+					if (new_pt == NULL)
+						return -ENOMEM;
+
+					new_pt->fence = dst;
+					list_replace(&dst_pt->pt_list,
+						     &new_pt->pt_list);
+					sync_pt_free(dst_pt);
+				}
+				collapsed = true;
+				break;
+			}
+		}
+
+		if (!collapsed) {
+			struct sync_pt *new_pt = sync_pt_dup(src_pt);
+
+			if (new_pt == NULL)
+				return -ENOMEM;
+
+			new_pt->fence = dst;
+			list_add(&new_pt->pt_list, &dst->pt_list_head);
+		}
 	}
 
 	return 0;
@@ -408,13 +433,7 @@ static int sync_fence_get_status(struct sync_fence *fence)
 
 	list_for_each(pos, &fence->pt_list_head) {
 		struct sync_pt *pt = container_of(pos, struct sync_pt, pt_list);
-		int pt_status;
-
-		if (pt == NULL) {
-			printk(KERN_ERR"[sync driver] sync_fence_get_status : sync_pt is NULL\n");
-			break;
-		}
-		pt_status = pt->status;
+		int pt_status = pt->status;
 
 		if (pt_status < 0) {
 			status = pt_status;
@@ -430,8 +449,8 @@ static int sync_fence_get_status(struct sync_fence *fence)
 struct sync_fence *sync_fence_merge(const char *name,
 				    struct sync_fence *a, struct sync_fence *b)
 {
-	struct list_head *pos;
 	struct sync_fence *fence;
+	struct list_head *pos;
 	int err;
 
 	fence = sync_fence_alloc(name);
@@ -442,19 +461,9 @@ struct sync_fence *sync_fence_merge(const char *name,
 	if (err < 0)
 		goto err;
 
-	err = sync_fence_copy_pts(fence, b);
+	err = sync_fence_merge_pts(fence, b);
 	if (err < 0)
 		goto err;
-
-	/* Make sure there is at least one point in the fence */
-	if (list_empty(&fence->pt_list_head)) {
-		struct sync_pt *orig_pt = list_first_entry(&a->pt_list_head,
-						struct sync_pt, pt_list);
-		struct sync_pt *new_pt = sync_pt_dup(orig_pt);
-
-		new_pt->fence = fence;
-		list_add(&new_pt->pt_list, &fence->pt_list_head);
-	}
 
 	list_for_each(pos, &fence->pt_list_head) {
 		struct sync_pt *pt =

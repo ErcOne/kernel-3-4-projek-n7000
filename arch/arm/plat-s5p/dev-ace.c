@@ -15,6 +15,8 @@
 #include <mach/map.h>
 #include <mach/irqs.h>
 
+#include <asm/sizes.h>
+
 static struct resource s5p_ace_resource[] = {
 	[0] = {
 		.start	= S5P_PA_ACE,

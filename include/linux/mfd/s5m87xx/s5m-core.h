@@ -145,7 +145,6 @@ enum s5m8767_reg {
 	S5M8767_REG_LDO26CTRL,
 	S5M8767_REG_LDO27CTRL,
 	S5M8767_REG_LDO28CTRL,
-	S5M8767_REG_BUCK1DVS2 = 0xE2,
 };
 
 /* S5M8763 registers */
@@ -308,6 +307,7 @@ enum s5m8763_irq {
  */
 struct s5m87xx_dev {
 	struct device *dev;
+	struct regmap *regmap;
 	struct i2c_client *i2c;
 	struct i2c_client *rtc;
 	struct mutex iolock;
@@ -321,38 +321,31 @@ struct s5m87xx_dev {
 	u8 irq_masks_cache[NUM_IRQ_REGS];
 	int type;
 	bool wakeup;
-	bool wtsr_smpl;
 };
 
 int s5m_irq_init(struct s5m87xx_dev *s5m87xx);
 void s5m_irq_exit(struct s5m87xx_dev *s5m87xx);
 int s5m_irq_resume(struct s5m87xx_dev *s5m87xx);
 
-extern int s5m_reg_read(struct i2c_client *i2c, u8 reg, u8 *dest);
-extern int s5m_bulk_read(struct i2c_client *i2c, u8 reg, int count, u8 *buf);
-extern int s5m_reg_write(struct i2c_client *i2c, u8 reg, u8 value);
-extern int s5m_bulk_write(struct i2c_client *i2c, u8 reg, int count, u8 *buf);
-extern int s5m_reg_update(struct i2c_client *i2c, u8 reg, u8 val, u8 mask);
+extern int s5m_reg_read(struct s5m87xx_dev *s5m87xx, u8 reg, void *dest);
+extern int s5m_bulk_read(struct s5m87xx_dev *s5m87xx, u8 reg, int count, u8 *buf);
+extern int s5m_reg_write(struct s5m87xx_dev *s5m87xx, u8 reg, u8 value);
+extern int s5m_bulk_write(struct s5m87xx_dev *s5m87xx, u8 reg, int count, u8 *buf);
+extern int s5m_reg_update(struct s5m87xx_dev *s5m87xx, u8 reg, u8 val, u8 mask);
 
 struct s5m_platform_data {
 	struct s5m_regulator_data	*regulators;
-	struct s5m_opmode_data		*opmode_data;
-
 	int				device_type;
 	int				num_regulators;
-	int				(*cfg_pmic_irq)(void);
 
-	/* IRQ */
-	int				irq_gpio;
 	int				irq_base;
+	int 				(*cfg_pmic_irq)(void);
 
 	int				ono;
 	bool				wakeup;
 	bool				buck_voltage_lock;
 
 	int				buck_gpios[3];
-	int				buck_ds[3];
-
 	int				buck2_voltage[8];
 	bool				buck2_gpiodvs;
 	int				buck3_voltage[8];
@@ -375,13 +368,6 @@ struct s5m_platform_data {
 	bool                            buck2_ramp_enable;
 	bool                            buck3_ramp_enable;
 	bool                            buck4_ramp_enable;
-
-	bool				wtsr_smpl;
-
-	int				buck1_init;
-	int				buck2_init;
-	int				buck3_init;
-	int				buck4_init;
 };
 
 #endif /*  __LINUX_MFD_S5M_CORE_H */

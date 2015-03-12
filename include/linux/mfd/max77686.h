@@ -29,9 +29,7 @@
 #define __LINUX_MFD_MAX77686_H
 
 #include <linux/regulator/consumer.h>
-
-#define MAX77686_SMPL_ENABLE			(0x1)
-#define MAX77686_WTSR_ENABLE			(0x2)
+#include <linux/rtc.h>
 
 /* MAX77686 regulator IDs */
 enum max77686_regulators {
@@ -100,9 +98,23 @@ struct max77686_opmode_data {
 	int mode;
 };
 
-struct max77686_buck234_gpio_data {
-	int gpio;
-	int data;
+/**
+ * struct max77686_wtsr_smpl - settings for WTSR/SMPL
+ * @wtsr_en:		WTSR Function Enable Control
+ * @smpl_en:		SMPL Function Enable Control
+ * @wtsr_timer_val:	Set the WTSR timer Threshold
+ *			0(250ms), 1(500ms), 2(750ms), 3(1000ms)
+ * @smpl_timer_val:	Set the SMPL timer Threshold
+ *			0(0.5s), 1(1.0s), 2(1.5s), 3(2.0s)
+ * @check_jigon:	if this value is true, do not enable SMPL function when
+ *			JIGONB is low(JIG cable is attached)
+ */
+struct max77686_wtsr_smpl {
+	bool wtsr_en;
+	bool smpl_en;
+	int wtsr_timer_val;
+	int smpl_timer_val;
+	bool check_jigon;
 };
 
 struct max77686_platform_data {
@@ -119,18 +131,21 @@ struct max77686_platform_data {
 
 	struct max77686_opmode_data *opmode_data;
 	int ramp_rate;
-	int wtsr_smpl;
 
 	/*
 	 * GPIO-DVS feature is not enabled with the current version of
 	 * MAX77686 driver. Buck2/3/4_voltages[0] is used as the default
 	 * voltage at probe. DVS/SELB gpios are set as OUTPUT-LOW.
 	 */
-	struct max77686_buck234_gpio_data buck234_gpio_dvs[3]; /* GPIO of [0]DVS1, [1]DVS2, [2]DVS3 */
+	int buck234_gpio_dvs[3]; /* GPIO of [0]DVS1, [1]DVS2, [2]DVS3 */
 	int buck234_gpio_selb[3]; /* [0]SELB2, [1]SELB3, [2]SELB4 */
 	unsigned int buck2_voltage[8]; /* buckx_voltage in uV */
 	unsigned int buck3_voltage[8];
 	unsigned int buck4_voltage[8];
+
+	/* ---- RTC ---- */
+	struct max77686_wtsr_smpl *wtsr_smpl;
+	struct rtc_time *init_time;
 };
 
 #endif /* __LINUX_MFD_MAX77686_H */
