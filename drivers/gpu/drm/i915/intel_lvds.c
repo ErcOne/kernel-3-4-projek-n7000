@@ -187,8 +187,6 @@ centre_horizontally(struct drm_display_mode *mode,
 
 	mode->crtc_hsync_start = mode->crtc_hblank_start + sync_pos;
 	mode->crtc_hsync_end = mode->crtc_hsync_start + sync_width;
-
-	mode->private_flags |= INTEL_MODE_CRTC_TIMINGS_SET;
 }
 
 static void
@@ -210,8 +208,6 @@ centre_vertically(struct drm_display_mode *mode,
 
 	mode->crtc_vsync_start = mode->crtc_vblank_start + sync_pos;
 	mode->crtc_vsync_end = mode->crtc_vsync_start + sync_width;
-
-	mode->private_flags |= INTEL_MODE_CRTC_TIMINGS_SET;
 }
 
 static inline u32 panel_fitter_scaling(u32 source, u32 target)
@@ -286,8 +282,6 @@ static bool intel_lvds_mode_fixup(struct drm_encoder *encoder,
 	 */
 	for_each_pipe(pipe)
 		I915_WRITE(BCLRPAT(pipe), 0);
-
-	drm_mode_set_crtcinfo(adjusted_mode, 0);
 
 	switch (intel_lvds->fitting_mode) {
 	case DRM_MODE_SCALE_CENTER:
@@ -408,7 +402,13 @@ static void intel_lvds_prepare(struct drm_encoder *encoder)
 {
 	struct intel_lvds *intel_lvds = to_intel_lvds(encoder);
 
-	intel_lvds_disable(intel_lvds);
+	/*
+	 * Prior to Ironlake, we must disable the pipe if we want to adjust
+	 * the panel fitter. However at all other times we can just reset
+	 * the registers regardless.
+	 */
+	if (!HAS_PCH_SPLIT(encoder->dev) && intel_lvds->pfit_dirty)
+		intel_lvds_disable(intel_lvds);
 }
 
 static void intel_lvds_commit(struct drm_encoder *encoder)
@@ -741,18 +741,10 @@ static const struct dmi_system_id intel_no_lvds[] = {
 	},
 	{
 		.callback = intel_no_lvds_dmi_callback,
-		.ident = "Hewlett-Packard HP t5740",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-			DMI_MATCH(DMI_PRODUCT_NAME, " t5740"),
-		},
-	},
-	{
-		.callback = intel_no_lvds_dmi_callback,
 		.ident = "Hewlett-Packard t5745",
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "hp t5745"),
+			DMI_MATCH(DMI_BOARD_NAME, "hp t5745"),
 		},
 	},
 	{
@@ -760,7 +752,7 @@ static const struct dmi_system_id intel_no_lvds[] = {
 		.ident = "Hewlett-Packard st5747",
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "hp st5747"),
+			DMI_MATCH(DMI_BOARD_NAME, "hp st5747"),
 		},
 	},
 	{
@@ -785,14 +777,6 @@ static const struct dmi_system_id intel_no_lvds[] = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Supermicro"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "X7SPA-H"),
-		},
-	},
-	{
-		.callback = intel_no_lvds_dmi_callback,
-		.ident = "Fujitsu Esprimo Q900",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "FUJITSU"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "ESPRIMO Q900"),
 		},
 	},
 
@@ -1091,8 +1075,7 @@ bool intel_lvds_init(struct drm_device *dev)
 		goto failed;
 
 out:
-	if (HAS_PCH_SPLIT(dev) &&
-	    !(dev_priv->quirks & QUIRK_NO_PCH_PWM_ENABLE)) {
+	if (HAS_PCH_SPLIT(dev)) {
 		u32 pwm;
 
 		pipe = (I915_READ(PCH_LVDS) & LVDS_PIPEB_SELECT) ? 1 : 0;

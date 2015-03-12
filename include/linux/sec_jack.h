@@ -44,17 +44,22 @@ struct sec_jack_buttons_zone {
 };
 
 struct sec_jack_platform_data {
-	void	(*set_micbias_state) (bool);
-	int	(*get_adc_value) (void);
-	struct sec_jack_zone	*zones;
+	struct s3c_adc_client *padc;
+	void (*set_micbias_state) (bool);
+	struct sec_jack_zone *zones;
 	struct sec_jack_buttons_zone	*buttons_zones;
 	int	num_zones;
 	int	num_buttons_zones;
 	int	det_gpio;
 	int	send_end_gpio;
-	bool	det_active_high;
-	bool	send_end_active_high;
+	bool det_active_high;
+	bool send_end_active_high;
 };
+
+#if defined(CONFIG_STMPE811_ADC)
+u16 stmpe811_get_adc_data(u8 channel);
+#endif
+
 #endif
 
 #endif

@@ -9,7 +9,7 @@
 
 #include <linux/socket.h>
 #include <linux/in6.h>
-#include <linux/atomic.h>
+#include <asm/atomic.h>
 
 struct flowi_common {
 	int	flowic_oif;
@@ -80,7 +80,7 @@ static inline void flowi4_init_output(struct flowi4 *fl4, int oif,
 				      __u32 mark, __u8 tos, __u8 scope,
 				      __u8 proto, __u8 flags,
 				      __be32 daddr, __be32 saddr,
-				      __be16 dport, __be16 sport,
+				      __be16 dport, __be32 sport,
 				      uid_t uid)
 {
 	fl4->flowi4_oif = oif;
@@ -226,7 +226,6 @@ extern struct flow_cache_object *flow_cache_lookup(
 		u8 dir, flow_resolve_t resolver, void *ctx);
 
 extern void flow_cache_flush(void);
-extern void flow_cache_flush_deferred(void);
 extern atomic_t flow_cache_genid;
 
 #endif

@@ -1,4 +1,4 @@
-/* linux arch/arm/mach-exynos4/hotplug.c
+/* linux arch/arm/mach-exynos/hotplug.c
  *
  *  Cloned from linux/arch/arm/mach-realview/hotplug.c
  *
@@ -13,11 +13,10 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/smp.h>
+#include <linux/completion.h>
 #include <linux/io.h>
 
 #include <asm/cacheflush.h>
-#include <asm/cp15.h>
-#include <asm/smp_plat.h>
 
 #include <plat/cpu.h>
 #include <mach/regs-pmu.h>
@@ -94,10 +93,9 @@ static inline void cpu_leave_lowpower(void)
 static inline void platform_do_lowpower(unsigned int cpu, int *spurious)
 {
 	for (;;) {
-
 		/* make cpu1 to be turned off at next WFI command */
-		if (cpu == 1)
-			__raw_writel(0, EXYNOS_ARM_CORE1_CONFIGURATION);
+		if ((cpu >= 1) && (cpu < NR_CPUS))
+			__raw_writel(0, S5P_ARM_CORE_CONFIGURATION(cpu));
 
 		/*
 		 * here's the WFI
@@ -107,7 +105,7 @@ static inline void platform_do_lowpower(unsigned int cpu, int *spurious)
 		    :
 		    : "memory", "cc");
 
-		if (pen_release == cpu_logical_map(cpu)) {
+		if (pen_release == cpu) {
 			/*
 			 * OK, proper wakeup, we're done
 			 */

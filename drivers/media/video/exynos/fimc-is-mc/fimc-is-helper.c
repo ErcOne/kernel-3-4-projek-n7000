@@ -729,21 +729,12 @@ int fimc_is_hw_a5_power_on(struct fimc_is_dev *isp)
 	enable_mipi();
 
 	/* init Clock */
-
-	if (isp->pdata->regulator_on) {
-		isp->pdata->regulator_on(isp->pdev);
-	} else {
-		dev_err(&isp->pdev->dev, "failed to regulator on\n");
-		goto done;
-	}
-
 	if (isp->pdata->clk_cfg) {
 		isp->pdata->clk_cfg(isp->pdev);
 	} else {
 		dev_err(&isp->pdev->dev, "failed to config clock\n");
 		goto done;
 	}
-
 
 	if (isp->pdata->clk_on) {
 		isp->pdata->clk_on(isp->pdev);
@@ -806,17 +797,6 @@ int fimc_is_hw_a5_power_off(struct fimc_is_dev *isp)
 		dev_err(&isp->pdev->dev, "failed to clock on\n");
 		goto done;
 	}
-
-	/* will be enabled after regulator problem solved*/
-	/*
-	if (isp->pdata->regulator_off) {
-		isp->pdata->regulator_off(isp->pdev);
-	} else {
-		dev_err(&isp->pdev->dev, "failed to regulator off\n");
-		goto done;
-	}
-	*/
-
 	/* 1. disable A5 */
 	writel(0x0, PMUREG_ISP_ARM_OPTION);
 
@@ -862,13 +842,13 @@ done:
 
 void fimc_is_hw_a5_power(struct fimc_is_dev *isp, int on)
 {
-#if defined(CONFIG_PM_RUNTIME)
+#if defined(CONFIG_EXYNOS_DEV_PD) && defined(CONFIG_PM_RUNTIME)
 	struct device *dev = &isp->pdev->dev;
 #endif
 
 	printk(KERN_INFO "%s(%d)\n", __func__, on);
 
-#if defined(CONFIG_PM_RUNTIME)
+#if defined(CONFIG_EXYNOS_DEV_PD) && defined(CONFIG_PM_RUNTIME)
 	if (on)
 		pm_runtime_get_sync(dev);
 	else
@@ -2092,7 +2072,7 @@ int fimc_is_hw_change_size(struct fimc_is_dev *dev)
 		front_width);
 	IS_SCALERC_SET_PARAM_DMA_OUTPUT_HEIGHT(dev,
 		front_height);
-	if ((front_width != dis_width) || (front_height != dis_height))
+	if((front_width != dis_width) || (front_height != dis_height))
 		IS_SCALERC_SET_PARAM_DMA_OUTPUT_OUTPATH(dev,
 			2);  /* unscaled image */
 	else

@@ -48,30 +48,32 @@ void gsc_pixelasync_sw_reset(struct gsc_dev *dev)
 
 int gsc_wait_reset(struct gsc_dev *dev)
 {
+	unsigned long timeo = jiffies + 10; /* timeout of 50ms */
 	u32 cfg;
-	u32 cnt = 10 * USEC_PER_MSEC;
 
-	do {
+	while (time_before(jiffies, timeo)) {
 		cfg = readl(dev->regs + GSC_SW_RESET);
 		if (!cfg)
 			return 0;
-		udelay(1);
-	} while (--cnt);
+		usleep_range(10, 20);
+	}
+	gsc_dbg("wait time : %d ms", jiffies_to_msecs(jiffies - timeo + 20));
 
-	return -EINVAL;
+	return -EBUSY;
 }
 
 int gsc_wait_operating(struct gsc_dev *dev)
 {
+	unsigned long timeo = jiffies + 10; /* timeout of 50ms */
 	u32 cfg;
-	u32 cnt = 10 * USEC_PER_MSEC;
 
-	do {
+	while (time_before(jiffies, timeo)) {
 		cfg = readl(dev->regs + GSC_ENABLE);
 		if (cfg & GSC_ENABLE_OP_STATUS)
 			return 0;
-		udelay(1);
-	} while (--cnt);
+		usleep_range(10, 20);
+	}
+	gsc_dbg("wait time : %d ms", jiffies_to_msecs(jiffies - timeo + 20));
 
 	return -EBUSY;
 }
@@ -158,7 +160,7 @@ int gsc_hw_get_mxr_path_status(void)
 	int i, cnt = 0;
 
 	u32 cfg = readl(SYSREG_GSCBLK_CFG0);
-	for (i = 0; i < GSC_MAX_DEVS; i++) {
+	for(i = 0; i < GSC_MAX_DEVS; i++) {
 		if (cfg & GSC_OUT_DST_MXR_SEL(i))
 			cnt++;
 	}
@@ -430,8 +432,6 @@ void gsc_hw_set_in_image_rgb(struct gsc_ctx *ctx)
 		cfg |= GSC_IN_RGB565;
 	else if (frame->fmt->pixelformat == V4L2_PIX_FMT_RGB32)
 		cfg |= GSC_IN_XRGB8888;
-	else if (frame->fmt->pixelformat == V4L2_PIX_FMT_BGR32)
-		cfg |= GSC_IN_XRGB8888 | GSC_IN_RB_SWAP;
 
 	writel(cfg, dev->regs + GSC_IN_CON);
 }
@@ -447,7 +447,7 @@ void gsc_hw_set_in_image_format(struct gsc_ctx *ctx)
 	cfg &= ~(GSC_IN_RGB_TYPE_MASK | GSC_IN_YUV422_1P_ORDER_MASK |
 		 GSC_IN_CHROMA_ORDER_MASK | GSC_IN_FORMAT_MASK |
 		 GSC_IN_TILE_TYPE_MASK | GSC_IN_TILE_MODE |
-		 GSC_IN_CHROM_STRIDE_SEL_MASK | GSC_IN_RB_SWAP_MASK);
+		 GSC_IN_CHROM_STRIDE_SEL_MASK);
 	writel(cfg, dev->regs + GSC_IN_CON);
 
 	if (is_rgb(frame->fmt->pixelformat)) {
@@ -563,8 +563,6 @@ void gsc_hw_set_out_image_rgb(struct gsc_ctx *ctx)
 		cfg |= GSC_OUT_RGB565;
 	else if (frame->fmt->pixelformat == V4L2_PIX_FMT_RGB32)
 		cfg |= GSC_OUT_XRGB8888;
-	else if (frame->fmt->pixelformat == V4L2_PIX_FMT_BGR32)
-		cfg |= GSC_OUT_XRGB8888 | GSC_OUT_RB_SWAP;
 
 	writel(cfg, dev->regs + GSC_OUT_CON);
 }
@@ -579,7 +577,8 @@ void gsc_hw_set_out_image_format(struct gsc_ctx *ctx)
 	cfg = readl(dev->regs + GSC_OUT_CON);
 	cfg &= ~(GSC_OUT_RGB_TYPE_MASK | GSC_OUT_YUV422_1P_ORDER_MASK |
 		 GSC_OUT_CHROMA_ORDER_MASK | GSC_OUT_FORMAT_MASK |
-		 GSC_OUT_CHROM_STRIDE_SEL_MASK | GSC_OUT_RB_SWAP_MASK);
+		 GSC_OUT_TILE_TYPE_MASK | GSC_OUT_TILE_MODE |
+		 GSC_OUT_CHROM_STRIDE_SEL_MASK);
 	writel(cfg, dev->regs + GSC_OUT_CON);
 
 	if (is_rgb(frame->fmt->pixelformat)) {
@@ -624,6 +623,10 @@ void gsc_hw_set_out_image_format(struct gsc_ctx *ctx)
 
 	if (is_AYV12(frame->fmt->pixelformat))
 		gsc_hw_set_out_chrom_stride(ctx);
+
+	if (is_tiled(frame->fmt))
+		cfg |= GSC_OUT_TILE_C_16x8 | GSC_OUT_TILE_MODE;
+
 end_set:
 	writel(cfg, dev->regs + GSC_OUT_CON);
 }
@@ -714,6 +717,15 @@ void gsc_hw_set_sfr_update(struct gsc_ctx *ctx)
 	writel(cfg, dev->regs + GSC_ENABLE);
 }
 
+void gsc_hw_set_mixer(void)
+{
+	u32 cfg = readl(SYSREG_DISP1BLK_CFG);
+
+	cfg |= (GSC_OUT_MIXER0_GSC3);
+
+	writel(cfg, SYSREG_DISP1BLK_CFG);
+}
+
 void gsc_hw_set_local_dst(int id, int out, bool on)
 {
 	u32 cfg = readl(SYSREG_GSCBLK_CFG0);
@@ -790,9 +802,9 @@ void gsc_hw_set_h_coef(struct gsc_ctx *ctx)
 	else
 		sc_ratio = 6;
 
-	for (i = 0; i < 9; i++) {
-		for (j = 0; j < 8; j++) {
-			for (k = 0; k < 3; k++) {
+	for(i = 0; i < 9; i++) {
+		for(j = 0; j < 8; j++) {
+			for(k = 0; k < 3; k++) {
 				writel(h_coef_8t[sc_ratio][i][j],
 				       dev->regs + GSC_HCOEF(i, j, k));
 			}
@@ -821,10 +833,10 @@ void gsc_hw_set_v_coef(struct gsc_ctx *ctx)
 	else
 		sc_ratio = 6;
 
-	for (i = 0; i < 9; i++) {
-		for (j = 0; j < 4; j++) {
-			for (k = 0; k < 3; k++) {
-				writel(v_coef_4t[sc_ratio][i][j],
+	for(i = 0; i < 9; i++) {
+		for(j = 0; j < 4; j++) {
+			for(k = 0; k < 3; k++) {
+				writel(v_coef_4t[sc_ratio][i][j],\
 				       dev->regs + GSC_VCOEF(i, j, k));
 			}
 		}

@@ -15,12 +15,14 @@
 
 /* SYSCON. GSCBLK_CFG */
 #include <plat/map-base.h>
-
+#include <plat/cpu.h>
 #define SYSREG_DISP1BLK_CFG		(S3C_VA_SYS + 0x0214)
 #define FIFORST_DISP1			(1 << 23)
+#define GSC_OUT_MIXER0			(1 << 7)
+#define GSC_OUT_MIXER0_GSC3		(3 << 5)
 #define SYSREG_GSCBLK_CFG0		(S3C_VA_SYS + 0x0220)
-#define GSC_OUT_DST_FIMD_SEL(x)		(1 << (8 + 2 * (x)))
-#define GSC_OUT_DST_MXR_SEL(x)		(2 << (8 + 2 * (x)))
+#define GSC_OUT_DST_FIMD_SEL(x)		(1 << (8 + 2 *(x)))
+#define GSC_OUT_DST_MXR_SEL(x)		(2 << (8 + 2 *(x)))
 #define GSC_PXLASYNC_RST(x)		(1 << (x))
 #define PXLASYNC_LO_MASK_CAMIF_TOP	(1 << 20)
 #define SYSREG_GSCBLK_CFG1		(S3C_VA_SYS + 0x0224)
@@ -156,6 +158,10 @@
 #define GSC_OUT_YUV422_1P		(4 << 4)
 #define GSC_OUT_YUV422_2P		(5 << 4)
 #define GSC_OUT_YUV444			(7 << 4)
+#define GSC_OUT_TILE_TYPE_MASK		(1 << 2)
+#define GSC_OUT_TILE_C_16x8		(0 << 2)
+#define GSC_OUT_TILE_C_16x16		(1 << 2)
+#define GSC_OUT_TILE_MODE		(1 << 1)
 #define GSC_OUT_PATH_MASK		(1 << 0)
 #define GSC_OUT_PATH_LOCAL		(1 << 0)
 #define GSC_OUT_PATH_MEMORY		(0 << 0)
@@ -232,9 +238,19 @@
 #define GSC_IN_BASE_ADDR_CR_CUR(n)	(0xC0 + (n) * 0x4)
 
 /* G-Scaler input address mask */
-#define GSC_IN_CURR_ADDR_INDEX		(0xf << 24)
-#define GSC_IN_CURR_GET_INDEX(x)	((x) >> 24)
-#define GSC_IN_BASE_ADDR_PINGPONG(x)	((x) << 16)
+#define GSC_EVT0_IN_CURR_ADDR_INDEX_SHIFT	12
+#define GSC_EVT0_IN_BASE_ADDR_PP_SHIFT		8
+#define GSC_EVT1_IN_CURR_ADDR_INDEX_SHIFT	24
+#define GSC_EVT1_IN_BASE_ADDR_PP_SHIFT		16
+#define GSC_IN_CURR_ADDR_INDEX		((soc_is_exynos5250() && samsung_rev() >= EXYNOS5250_REV_1_0) ? \
+					(0xf << GSC_EVT1_IN_CURR_ADDR_INDEX_SHIFT) : \
+					(0xf << GSC_EVT0_IN_CURR_ADDR_INDEX_SHIFT))
+#define GSC_IN_CURR_GET_INDEX(x)	((soc_is_exynos5250() && samsung_rev() >= EXYNOS5250_REV_1_0) ? \
+					((x) >> GSC_EVT1_IN_CURR_ADDR_INDEX_SHIFT) : \
+					((x) >> GSC_EVT0_IN_CURR_ADDR_INDEX_SHIFT))
+#define GSC_IN_BASE_ADDR_PINGPONG(x)	((soc_is_exynos5250() && samsung_rev() >= EXYNOS5250_REV_1_0) ? \
+					((x) << GSC_EVT1_IN_BASE_ADDR_PP_SHIFT) : \
+					((x) << GSC_EVT0_IN_BASE_ADDR_PP_SHIFT))
 #define GSC_IN_BASE_ADDR_MASK		(0xff << 0)
 
 /* G-Scaler output y address mask */

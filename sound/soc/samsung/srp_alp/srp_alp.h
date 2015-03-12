@@ -6,11 +6,9 @@
 /* Base address */
 #define SRP_IRAM_BASE		(0x02020000)
 #define SRP_DMEM_BASE		(0x03000000)
-#define SRP_IDMA_BASE		(0x03000004)
+#define SRP_COMMBOX_BASE	(0x03820000)
 
 /* SRAM information */
-#define INT_MEM_SIZE	(soc_is_exynos5250() ? \
-			(0x49000) : (0x39000))
 #define IRAM_SIZE	((soc_is_exynos4412() || soc_is_exynos4212()) ? \
 			(0x40000) : (0x20000))
 #define DMEM_SIZE	(soc_is_exynos5250() ? \
@@ -18,6 +16,10 @@
 #define ICACHE_SIZE	(soc_is_exynos5250() ? \
 			(0x18000) : (0x10000))
 #define CMEM_SIZE       (0x9000)
+
+/* SRAM & Commbox base address */
+#define SRP_ICACHE_ADDR		(SRP_DMEM_BASE + DMEM_SIZE)
+#define SRP_CMEM_ADDR		(SRP_ICACHE_ADDR + ICACHE_SIZE)
 
 /* IBUF/OBUF Size */
 #define IBUF_SIZE	(0x4000)
@@ -30,14 +32,14 @@
 #define IBUF_OFFSET	((soc_is_exynos4412() || soc_is_exynos4212()) ? \
 			(0x30000) : (0x10000))
 #elif defined(CONFIG_ARCH_EXYNOS5)
-#define IBUF_OFFSET	(0x8004)
+#define IBUF_OFFSET	(0x8104)
 #endif
 
 /* OBUF Offset */
 #if defined(CONFIG_ARCH_EXYNOS4)
 #define OBUF_OFFSET	(0x4)
 #elif defined(CONFIG_ARCH_EXYNOS5)
-#define OBUF_OFFSET	(0x10004)
+#define OBUF_OFFSET	(0x10104)
 #endif
 
 /* SRP Input/Output buffer physical address */
@@ -46,7 +48,7 @@
 #elif defined(CONFIG_ARCH_EXYNOS5)
 #define SRP_IBUF_PHY_ADDR	(SRP_DMEM_BASE + IBUF_OFFSET)
 #endif
-#define SRP_OBUF_PHY_ADDR      (SRP_DMEM_BASE + OBUF_OFFSET)
+#define SRP_OBUF_PHY_ADDR	(SRP_DMEM_BASE + OBUF_OFFSET)
 
 /* IBUF/OBUF NUM */
 #define IBUF_NUM	(0x2)
@@ -54,11 +56,12 @@
 #define START_THRESHOLD	(IBUF_SIZE * 3)
 
 /* Commbox & Etc information */
-#define COMMBOX_SIZE	(0x200)
+#define COMMBOX_SIZE	(0x308)
 
 /* Reserved memory on DRAM */
 #define BASE_MEM_SIZE	(CONFIG_AUDIO_SAMSUNG_MEMSIZE_SRP << 10)
 #define BITSTREAM_SIZE_MAX	(0x7FFFFFFF)
+#define DATA_OFFSET	(0x18104)
 
 /* F/W Endian Configuration */
 #ifdef USE_FW_ENDIAN_CONVERT
@@ -126,13 +129,15 @@ struct srp_info {
 	struct srp_fw_info	fw_info;
 	struct srp_dec_info	dec_info;
 	struct srp_for_suspend  sp_data;
-	struct clk		*clk;
 
 	void __iomem	*iram;
 	void __iomem	*dmem;
 	void __iomem	*icache;
 	void __iomem	*cmem;
 	void __iomem	*commbox;
+
+	/* MMAP base address */
+	unsigned int	mmap_base;
 
 	/* IBUF informaion */
 	unsigned char	*ibuf0;
@@ -161,6 +166,7 @@ struct srp_info {
 	/* For EVT0 : will be removed on EVT1 */
 	unsigned char	*pcm_obuf0;
 	unsigned char	*pcm_obuf1;
+	unsigned int	pcm_obuf_pa;
 
 	/* Temporary BUF informaion */
 	unsigned char	*wbuf;
@@ -173,6 +179,7 @@ struct srp_info {
 	unsigned long	pcm_size;
 
 	/* SRP status information */
+	unsigned int	first_init;
 	unsigned int	decoding_started;
 	unsigned int	is_opened;
 	unsigned int	is_running;
@@ -182,10 +189,13 @@ struct srp_info {
 	unsigned int	wait_for_eos;
 	unsigned int	prepare_for_eos;
 	unsigned int	play_done;
-	unsigned int	idma_addr;
 
 	bool	pm_suspended;
 	bool	pm_resumed;
+	bool	initialized;
+
+	/* Function pointer for clock control */
+	void	(*audss_clk_enable)(bool enable);
 };
 
 /* SRP Pending On/Off status */
@@ -197,7 +207,8 @@ enum {
 /* Request Suspend/Resume */
 enum {
 	SUSPEND = 0,
-	RESUME = 1,
+	RESUME,
+	RESET,
 };
 
 #endif /* __SRP_ALP_H */

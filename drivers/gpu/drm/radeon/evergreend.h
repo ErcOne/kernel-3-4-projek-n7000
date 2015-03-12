@@ -77,14 +77,6 @@
 
 #define	CONFIG_MEMSIZE					0x5428
 
-#define	BIF_FB_EN						0x5490
-#define		FB_READ_EN					(1 << 0)
-#define		FB_WRITE_EN					(1 << 1)
-
-#define	CP_STRMOUT_CNTL					0x84FC
-
-#define	CP_COHER_CNTL					0x85F0
-#define	CP_COHER_SIZE					0x85F4
 #define	CP_COHER_BASE					0x85F8
 #define CP_ME_CNTL					0x86D8
 #define		CP_ME_HALT					(1 << 28)
@@ -204,9 +196,6 @@
 #define		NOOFCHAN_MASK					0x00003000
 #define MC_SHARED_CHREMAP					0x2008
 
-#define MC_SHARED_BLACKOUT_CNTL           		0x20ac
-#define		BLACKOUT_MODE_MASK			0x00000007
-
 #define	MC_ARB_RAMCFG					0x2760
 #define		NOOFBANK_SHIFT					0
 #define		NOOFBANK_MASK					0x00000003
@@ -284,7 +273,6 @@
 #define	SCRATCH_UMSK					0x8540
 #define	SCRATCH_ADDR					0x8544
 
-#define	SMX_SAR_CTL0					0xA008
 #define	SMX_DC_CTL0					0xA020
 #define		USE_HASH_FUNCTION				(1 << 0)
 #define		NUMBER_OF_SETS(x)				((x) << 1)
@@ -471,10 +459,6 @@
 #define	PIPE0_LATENCY_CONTROL			          0x0bf4
 #       define LATENCY_LOW_WATERMARK(x)                   ((x) << 0)
 #       define LATENCY_HIGH_WATERMARK(x)                  ((x) << 16)
-
-#define	PIPE0_DMIF_BUFFER_CONTROL			  0x0ca0
-#       define DMIF_BUFFERS_ALLOCATED(x)                  ((x) << 0)
-#       define DMIF_BUFFERS_ALLOCATED_COMPLETED           (1 << 4)
 
 #define IH_RB_CNTL                                        0x3e00
 #       define IH_RB_ENABLE                               (1 << 0)
@@ -1008,14 +992,6 @@
 #define   G_028008_SLICE_MAX(x)                        (((x) >> 13) & 0x7FF)
 #define   C_028008_SLICE_MAX                           0xFF001FFF
 #define DB_HTILE_DATA_BASE				0x28014
-#define DB_HTILE_SURFACE				0x28abc
-#define   S_028ABC_HTILE_WIDTH(x)                      (((x) & 0x1) << 0)
-#define   G_028ABC_HTILE_WIDTH(x)                      (((x) >> 0) & 0x1)
-#define   C_028ABC_HTILE_WIDTH                         0xFFFFFFFE
-#define   S_028ABC_HTILE_HEIGHT(x)                      (((x) & 0x1) << 1)
-#define   G_028ABC_HTILE_HEIGHT(x)                      (((x) >> 1) & 0x1)
-#define   C_028ABC_HTILE_HEIGHT                         0xFFFFFFFD
-#define   G_028ABC_LINEAR(x)                           (((x) >> 2) & 0x1)
 #define DB_Z_INFO					0x28040
 #       define Z_ARRAY_MODE(x)                          ((x) << 4)
 #       define DB_TILE_SPLIT(x)                         (((x) & 0x7) << 8)

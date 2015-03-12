@@ -105,10 +105,6 @@
 #define INTEL_MODE_PIXEL_MULTIPLIER_SHIFT (0x0)
 #define INTEL_MODE_PIXEL_MULTIPLIER_MASK (0xf << INTEL_MODE_PIXEL_MULTIPLIER_SHIFT)
 #define INTEL_MODE_DP_FORCE_6BPC (0x10)
-/* This flag must be set by the encoder's mode_fixup if it changes the crtc
- * timings in the mode to prevent the crtc fixup from overwriting them.
- * Currently only lvds needs that. */
-#define INTEL_MODE_CRTC_TIMINGS_SET (0x20)
 
 static inline void
 intel_mode_set_pixel_multiplier(struct drm_display_mode *mode,
@@ -248,11 +244,6 @@ struct dip_infoframe {
 			uint16_t left_bar_end;
 			uint16_t right_bar_start;
 		} __attribute__ ((packed)) avi;
-		struct {
-			uint8_t vn[8];
-			uint8_t pd[16];
-			uint8_t sdi;
-		} __attribute__ ((packed)) spd;
 		uint8_t payload[27];
 	} __attribute__ ((packed)) body;
 } __attribute__((packed));
@@ -288,8 +279,6 @@ struct intel_fbc_work {
 	int interval;
 };
 
-int intel_connector_update_modes(struct drm_connector *connector,
-				struct edid *edid);
 int intel_ddc_get_modes(struct drm_connector *c, struct i2c_adapter *adapter);
 extern bool intel_ddc_probe(struct intel_encoder *intel_encoder, int ddc_bus);
 

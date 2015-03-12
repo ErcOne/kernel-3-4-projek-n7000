@@ -37,18 +37,18 @@ void init_lcd(struct mipi_dsim_device *dsim)
 {
 	s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_DCS_SHORT_WRITE,
 		0, 0);
-	mdelay(60);
+	msleep(60);
 	/* Exit sleep */
 	s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_DCS_SHORT_WRITE,
 		0x11, 0);
-	mdelay(600);
+	msleep(600);
 	s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_TURN_ON_PERIPHERAL,
 		0, 0);
 }
 
 void s6e8ab0_mipi_lcd_off(struct mipi_dsim_device *dsim)
 {
-	mdelay(1);
+	usleep_range(1000, 1200);
 }
 
 static int s6e8ab0_mipi_lcd_suspend(struct mipi_dsim_device *dsim)

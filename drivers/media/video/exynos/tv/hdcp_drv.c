@@ -14,8 +14,6 @@
 #include <linux/delay.h>
 #include <linux/sched.h>
 #include <linux/workqueue.h>
-#include <linux/export.h>
-#include <linux/module.h>
 
 #include "hdmi.h"
 #include "regs-hdmi-5250.h"
@@ -28,7 +26,7 @@
 #define BKSV_RETRY_CNT		14
 #define BKSV_DELAY		100
 
-#define DDC_RETRY_CNT		40
+#define DDC_RETRY_CNT		400000
 #define DDC_DELAY		25
 
 #define KEY_LOAD_RETRY_CNT	1000
@@ -100,8 +98,7 @@ int hdcp_i2c_read(struct hdmi_device *hdev, u8 offset, int bytes, u8 *buf)
 			break;
 
 		if (hdev->hdcp_info.auth_status == FIRST_AUTHENTICATION_DONE
-				|| hdev->hdcp_info.auth_status
-					== SECOND_AUTHENTICATION_DONE)
+			|| hdev->hdcp_info.auth_status == SECOND_AUTHENTICATION_DONE)
 			goto ddc_read_err;
 
 		msleep(DDC_DELAY);
@@ -229,8 +226,7 @@ static void hdcp_encryption(struct hdmi_device *hdev, bool on)
 	hdmi_reg_mute(hdev, !on);
 }
 
-static int hdcp_write_key(struct hdmi_device *hdev, int size,
-		int reg, int offset)
+static int hdcp_write_key(struct hdmi_device *hdev, int size, int reg, int offset)
 {
 	struct device *dev = hdev->dev;
 	u8 buf[MAX_KEY_SIZE];
@@ -329,8 +325,7 @@ static int hdcp_read_bksv(struct hdmi_device *hdev)
 			goto bksv_read_err;
 
 		if ((zero == 20) && (one == 20)) {
-			hdmi_write_bytes(hdev, HDMI_HDCP_BKSV_(0),
-					bksv, BKSV_SIZE);
+			hdmi_write_bytes(hdev, HDMI_HDCP_BKSV_(0), bksv, BKSV_SIZE);
 			break;
 		}
 		dev_dbg(dev, "%s: invalid bksv, retry : %d\n", __func__, cnt);
@@ -416,13 +411,12 @@ static int hdcp_reset_auth(struct hdmi_device *hdev)
 {
 	struct device *dev = hdev->dev;
 	u8 val;
+	unsigned long spin_flags;
 
-	mutex_lock(&hdev->mutex);
-
-	if (!is_hdmi_streaming(hdev)) {
-		mutex_unlock(&hdev->mutex);
+	if (!is_hdmi_streaming(hdev))
 		return -ENODEV;
-	}
+
+	spin_lock_irqsave(&hdev->hdcp_info.reset_lock, spin_flags);
 
 	hdev->hdcp_info.event		= HDCP_EVENT_STOP;
 	hdev->hdcp_info.auth_status	= NOT_AUTHENTICATED;
@@ -442,7 +436,7 @@ static int hdcp_reset_auth(struct hdmi_device *hdev)
 	hdmi_writeb(hdev, HDMI_HDCP_CHECK_RESULT, HDMI_HDCP_CLR_ALL_RESULTS);
 
 	/* need some delay (at least 1 frame) */
-	msleep(16);
+	mdelay(16);
 
 	hdcp_sw_reset(hdev);
 
@@ -450,8 +444,7 @@ static int hdcp_reset_auth(struct hdmi_device *hdev)
 		HDMI_WATCHDOG_INT_EN | HDMI_WTFORACTIVERX_INT_EN;
 	hdmi_write_mask(hdev, HDMI_STATUS_EN, ~0, val);
 	hdmi_write_mask(hdev, HDMI_HDCP_CTRL1, ~0, HDMI_HDCP_CP_DESIRED_EN);
-
-	mutex_unlock(&hdev->mutex);
+	spin_unlock_irqrestore(&hdev->hdcp_info.reset_lock, spin_flags);
 
 	return 0;
 }
@@ -462,8 +455,7 @@ static int hdcp_loadkey(struct hdmi_device *hdev)
 	u8 val;
 	int cnt = 0;
 
-	hdmi_write_mask(hdev, HDMI_EFUSE_CTRL, ~0,
-			HDMI_EFUSE_CTRL_HDCP_KEY_READ);
+	hdmi_write_mask(hdev, HDMI_EFUSE_CTRL, ~0, HDMI_EFUSE_CTRL_HDCP_KEY_READ);
 
 	do {
 		val = hdmi_readb(hdev, HDMI_EFUSE_STATUS);
@@ -615,8 +607,7 @@ static int hdmi_check_repeater(struct hdmi_device *hdev)
 			cnt++;
 		} while (cnt < dev_cnt);
 	} else
-		hdmi_writeb(hdev, HDMI_HDCP_KSV_LIST_CON,
-				HDMI_HDCP_KSV_LIST_EMPTY);
+		hdmi_writeb(hdev, HDMI_HDCP_KSV_LIST_CON, HDMI_HDCP_KSV_LIST_EMPTY);
 
 	if (hdcp_i2c_read(hdev, HDCP_SHA1, SHA_1_HASH_SIZE, rx_v) < 0)
 		goto check_repeater_err;
@@ -632,8 +623,7 @@ static int hdmi_check_repeater(struct hdmi_device *hdev)
 			dev_dbg(dev, "%s: SHA-1 result is ok\n", __func__);
 			hdmi_writeb(hdev, HDMI_HDCP_SHA_RESULT, 0x0);
 		} else {
-			dev_dbg(dev, "%s: SHA-1 result is not vaild\n",
-					__func__);
+			dev_dbg(dev, "%s: SHA-1 result is not vaild\n", __func__);
 			hdmi_writeb(hdev, HDMI_HDCP_SHA_RESULT, 0x0);
 			goto check_repeater_err;
 		}
@@ -877,8 +867,7 @@ irqreturn_t hdcp_irq_handler(struct hdmi_device *hdev)
 
 	if (flag & HDMI_WTFORACTIVERX_INT_OCC) {
 		event |= HDCP_EVENT_READ_BKSV_START;
-		hdmi_write_mask(hdev, HDMI_STATUS, ~0,
-				HDMI_WTFORACTIVERX_INT_OCC);
+		hdmi_write_mask(hdev, HDMI_STATUS, ~0, HDMI_WTFORACTIVERX_INT_OCC);
 		hdmi_write(hdev, HDMI_HDCP_I2C_INT, 0x0);
 	}
 
@@ -918,11 +907,13 @@ irqreturn_t hdcp_irq_handler(struct hdmi_device *hdev)
 
 int hdcp_prepare(struct hdmi_device *hdev)
 {
-	hdev->hdcp_wq = create_singlethread_workqueue("khdcpd");
+	hdev->hdcp_wq = create_workqueue("khdcpd");
 	if (hdev->hdcp_wq == NULL)
 		return -ENOMEM;
 
 	INIT_WORK(&hdev->work, hdcp_work);
+
+	spin_lock_init(&hdev->hdcp_info.reset_lock);
 
 #if defined(CONFIG_VIDEO_EXYNOS_HDCP)
 	hdev->hdcp_info.hdcp_enable = 1;
@@ -956,9 +947,9 @@ int hdcp_start(struct hdmi_device *hdev)
 
 	hdmi_write(hdev, HDMI_HDCP_CTRL1, HDMI_HDCP_CP_DESIRED_EN);
 
-	hdev->hdcp_info.hdcp_start = 1;
-
 	hdmi_set_int_mask(hdev, HDMI_INTC_EN_HDCP, 1);
+
+	hdev->hdcp_info.hdcp_start = 1;
 
 	return 0;
 }

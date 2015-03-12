@@ -3,7 +3,6 @@
 #include <linux/ioport.h>
 #include <linux/swap.h>
 #include <linux/memblock.h>
-#include <linux/bootmem.h>	/* for max_low_pfn */
 
 #include <asm/cacheflush.h>
 #include <asm/e820.h>
@@ -12,10 +11,10 @@
 #include <asm/page_types.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
+#include <asm/system.h>
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
 #include <asm/proto.h>
-#include <asm/dma.h>		/* for MAX_DMA_PFN */
 
 unsigned long __initdata pgt_buf_start;
 unsigned long __meminitdata pgt_buf_end;
@@ -45,14 +44,10 @@ static void __init find_early_table_space(struct map_range *mr, int nr_range)
 	int i;
 	unsigned long puds = 0, pmds = 0, ptes = 0, tables;
 	unsigned long start = 0, good_end;
-	unsigned long pgd_extra = 0;
 	phys_addr_t base;
 
 	for (i = 0; i < nr_range; i++) {
 		unsigned long range, extra;
-
-		if ((mr[i].end >> PGDIR_SHIFT) - (mr[i].start >> PGDIR_SHIFT))
-			pgd_extra++;
 
 		range = mr[i].end - mr[i].start;
 		puds += (range + PUD_SIZE - 1) >> PUD_SHIFT;
@@ -78,7 +73,6 @@ static void __init find_early_table_space(struct map_range *mr, int nr_range)
 	tables = roundup(puds * sizeof(pud_t), PAGE_SIZE);
 	tables += roundup(pmds * sizeof(pmd_t), PAGE_SIZE);
 	tables += roundup(ptes * sizeof(pte_t), PAGE_SIZE);
-	tables += (pgd_extra * PAGE_SIZE);
 
 #ifdef CONFIG_X86_32
 	/* for fixmap */
@@ -87,7 +81,7 @@ static void __init find_early_table_space(struct map_range *mr, int nr_range)
 	good_end = max_pfn_mapped << PAGE_SHIFT;
 
 	base = memblock_find_in_range(start, good_end, tables, PAGE_SIZE);
-	if (!base)
+	if (base == MEMBLOCK_ERROR)
 		panic("Cannot find space for the kernel page tables");
 
 	pgt_buf_start = base >> PAGE_SHIFT;
@@ -101,7 +95,7 @@ static void __init find_early_table_space(struct map_range *mr, int nr_range)
 
 void __init native_pagetable_reserve(u64 start, u64 end)
 {
-	memblock_reserve(start, end - start);
+	memblock_x86_reserve_range(start, end, "PGTABLE");
 }
 
 #ifdef CONFIG_X86_32
@@ -294,8 +288,8 @@ unsigned long __init_refok init_memory_mapping(unsigned long start,
 	 * pgt_buf_end) and free the other ones (pgt_buf_end - pgt_buf_top)
 	 * so that they can be reused for other purposes.
 	 *
-	 * On native it just means calling memblock_reserve, on Xen it also
-	 * means marking RW the pagetable pages that we allocated before
+	 * On native it just means calling memblock_x86_reserve_range, on Xen it
+	 * also means marking RW the pagetable pages that we allocated before
 	 * but that haven't been used.
 	 *
 	 * In fact on xen we mark RO the whole range pgt_buf_start -
@@ -407,24 +401,3 @@ void free_initrd_mem(unsigned long start, unsigned long end)
 	free_init_pages("initrd memory", start, PAGE_ALIGN(end));
 }
 #endif
-
-void __init zone_sizes_init(void)
-{
-	unsigned long max_zone_pfns[MAX_NR_ZONES];
-
-	memset(max_zone_pfns, 0, sizeof(max_zone_pfns));
-
-#ifdef CONFIG_ZONE_DMA
-	max_zone_pfns[ZONE_DMA]		= MAX_DMA_PFN;
-#endif
-#ifdef CONFIG_ZONE_DMA32
-	max_zone_pfns[ZONE_DMA32]	= MAX_DMA32_PFN;
-#endif
-	max_zone_pfns[ZONE_NORMAL]	= max_low_pfn;
-#ifdef CONFIG_HIGHMEM
-	max_zone_pfns[ZONE_HIGHMEM]	= max_pfn;
-#endif
-
-	free_area_init_nodes(max_zone_pfns);
-}
-

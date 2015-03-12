@@ -19,7 +19,6 @@
 #include <linux/notifier.h>
 
 struct opp;
-struct device;
 
 enum opp_event {
 	OPP_EVENT_ADD, OPP_EVENT_ENABLE, OPP_EVENT_DISABLE,
@@ -98,28 +97,20 @@ static inline int opp_disable(struct device *dev, unsigned long freq)
 	return 0;
 }
 
-static inline struct srcu_notifier_head *opp_get_notifier(struct device *dev)
+struct srcu_notifier_head *opp_get_notifier(struct device *dev)
 {
 	return ERR_PTR(-EINVAL);
 }
-#endif		/* CONFIG_PM_OPP */
+#endif		/* CONFIG_PM */
 
 #if defined(CONFIG_CPU_FREQ) && defined(CONFIG_PM_OPP)
 int opp_init_cpufreq_table(struct device *dev,
 			    struct cpufreq_frequency_table **table);
-void opp_free_cpufreq_table(struct device *dev,
-				struct cpufreq_frequency_table **table);
 #else
 static inline int opp_init_cpufreq_table(struct device *dev,
 			    struct cpufreq_frequency_table **table)
 {
 	return -EINVAL;
-}
-
-static inline
-void opp_free_cpufreq_table(struct device *dev,
-				struct cpufreq_frequency_table **table)
-{
 }
 #endif		/* CONFIG_CPU_FREQ */
 

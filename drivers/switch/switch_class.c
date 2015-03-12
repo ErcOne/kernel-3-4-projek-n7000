@@ -22,6 +22,7 @@
 #include <linux/fs.h>
 #include <linux/err.h>
 #include <linux/switch.h>
+#include <linux/hrtimer.h>
 
 struct class *switch_class;
 static atomic_t device_count;
@@ -31,6 +32,12 @@ static ssize_t state_show(struct device *dev, struct device_attribute *attr,
 {
 	struct switch_dev *sdev = (struct switch_dev *)
 		dev_get_drvdata(dev);
+
+	if (!sdev) {
+		printk(KERN_ERR "switch device is NULL\n");
+		BUG();
+		return 0; /* meaningless */
+	}
 
 	if (sdev->print_state) {
 		int ret = sdev->print_state(sdev, buf);
@@ -45,6 +52,12 @@ static ssize_t name_show(struct device *dev, struct device_attribute *attr,
 {
 	struct switch_dev *sdev = (struct switch_dev *)
 		dev_get_drvdata(dev);
+
+	if (!sdev) {
+		printk(KERN_ERR "switch device is NULL\n");
+		BUG();
+		return 0; /* meaningless */
+	}
 
 	if (sdev->print_name) {
 		int ret = sdev->print_name(sdev, buf);
@@ -61,8 +74,9 @@ void switch_set_state(struct switch_dev *sdev, int state)
 {
 	char name_buf[120];
 	char state_buf[120];
+	char timestamp_buf[120];
 	char *prop_buf;
-	char *envp[3];
+	char *envp[4];
 	int env_offset = 0;
 	int length;
 
@@ -87,6 +101,9 @@ void switch_set_state(struct switch_dev *sdev, int state)
 					"SWITCH_STATE=%s", prop_buf);
 				envp[env_offset++] = state_buf;
 			}
+			snprintf(timestamp_buf, sizeof(timestamp_buf),
+				 "SWITCH_TIME=%llu", ktime_to_ns(ktime_get()));
+			envp[env_offset++] = timestamp_buf;
 			envp[env_offset] = NULL;
 			kobject_uevent_env(&sdev->dev->kobj, KOBJ_CHANGE, envp);
 			free_page((unsigned long)prop_buf);

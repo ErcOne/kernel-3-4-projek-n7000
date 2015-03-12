@@ -52,7 +52,7 @@ static int cp210x_startup(struct usb_serial *);
 static void cp210x_release(struct usb_serial *);
 static void cp210x_dtr_rts(struct usb_serial_port *p, int on);
 
-static bool debug;
+static int debug;
 
 static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x045B, 0x0053) }, /* Renesas RX610 RX-Stick */
@@ -60,7 +60,6 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x0489, 0xE000) }, /* Pirelli Broadband S.p.A, DP-L10 SIP/GSM Mobile */
 	{ USB_DEVICE(0x0489, 0xE003) }, /* Pirelli Broadband S.p.A, DP-L10 SIP/GSM Mobile */
 	{ USB_DEVICE(0x0745, 0x1000) }, /* CipherLab USB CCD Barcode Scanner 1000 */
-	{ USB_DEVICE(0x0846, 0x1100) }, /* NetGear Managed Switch M4100 series, M5300 series, M7100 series */
 	{ USB_DEVICE(0x08e6, 0x5501) }, /* Gemalto Prox-PU/CU contactless smartcard reader */
 	{ USB_DEVICE(0x08FD, 0x000A) }, /* Digianswer A/S , ZigBee/802.15.4 MAC Device */
 	{ USB_DEVICE(0x0BED, 0x1100) }, /* MEI (TM) Cashflow-SC Bill/Voucher Acceptor */
@@ -92,7 +91,6 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x813F) }, /* Tams Master Easy Control */
 	{ USB_DEVICE(0x10C4, 0x814A) }, /* West Mountain Radio RIGblaster P&P */
 	{ USB_DEVICE(0x10C4, 0x814B) }, /* West Mountain Radio RIGtalk */
-	{ USB_DEVICE(0x2405, 0x0003) }, /* West Mountain Radio RIGblaster Advantage */
 	{ USB_DEVICE(0x10C4, 0x8156) }, /* B&G H3000 link cable */
 	{ USB_DEVICE(0x10C4, 0x815E) }, /* Helicomm IP-Link 1220-DVM */
 	{ USB_DEVICE(0x10C4, 0x815F) }, /* Timewave HamLinkUSB */
@@ -125,8 +123,6 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x85F8) }, /* Virtenio Preon32 */
 	{ USB_DEVICE(0x10C4, 0x8664) }, /* AC-Services CAN-IF */
 	{ USB_DEVICE(0x10C4, 0x8665) }, /* AC-Services OBD-IF */
-	{ USB_DEVICE(0x10C4, 0x88A4) }, /* MMB Networks ZigBee USB Device */
-	{ USB_DEVICE(0x10C4, 0x88A5) }, /* Planet Innovation Ingeni ZigBee USB Device */
 	{ USB_DEVICE(0x10C4, 0xEA60) }, /* Silicon Labs factory default */
 	{ USB_DEVICE(0x10C4, 0xEA61) }, /* Silicon Labs factory default */
 	{ USB_DEVICE(0x10C4, 0xEA70) }, /* Silicon Labs factory default */
@@ -157,29 +153,9 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x17F4, 0xAAAA) }, /* Wavesense Jazz blood glucose meter */
 	{ USB_DEVICE(0x1843, 0x0200) }, /* Vaisala USB Instrument Cable */
 	{ USB_DEVICE(0x18EF, 0xE00F) }, /* ELV USB-I2C-Interface */
-	{ USB_DEVICE(0x1ADB, 0x0001) }, /* Schweitzer Engineering C662 Cable */
 	{ USB_DEVICE(0x1BE3, 0x07A6) }, /* WAGO 750-923 USB Service Cable */
 	{ USB_DEVICE(0x1E29, 0x0102) }, /* Festo CPX-USB */
 	{ USB_DEVICE(0x1E29, 0x0501) }, /* Festo CMSP */
-	{ USB_DEVICE(0x1FB9, 0x0100) }, /* Lake Shore Model 121 Current Source */
-	{ USB_DEVICE(0x1FB9, 0x0200) }, /* Lake Shore Model 218A Temperature Monitor */
-	{ USB_DEVICE(0x1FB9, 0x0201) }, /* Lake Shore Model 219 Temperature Monitor */
-	{ USB_DEVICE(0x1FB9, 0x0202) }, /* Lake Shore Model 233 Temperature Transmitter */
-	{ USB_DEVICE(0x1FB9, 0x0203) }, /* Lake Shore Model 235 Temperature Transmitter */
-	{ USB_DEVICE(0x1FB9, 0x0300) }, /* Lake Shore Model 335 Temperature Controller */
-	{ USB_DEVICE(0x1FB9, 0x0301) }, /* Lake Shore Model 336 Temperature Controller */
-	{ USB_DEVICE(0x1FB9, 0x0302) }, /* Lake Shore Model 350 Temperature Controller */
-	{ USB_DEVICE(0x1FB9, 0x0303) }, /* Lake Shore Model 371 AC Bridge */
-	{ USB_DEVICE(0x1FB9, 0x0400) }, /* Lake Shore Model 411 Handheld Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0401) }, /* Lake Shore Model 425 Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0402) }, /* Lake Shore Model 455A Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0403) }, /* Lake Shore Model 475A Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0404) }, /* Lake Shore Model 465 Three Axis Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0600) }, /* Lake Shore Model 625A Superconducting MPS */
-	{ USB_DEVICE(0x1FB9, 0x0601) }, /* Lake Shore Model 642A Magnet Power Supply */
-	{ USB_DEVICE(0x1FB9, 0x0602) }, /* Lake Shore Model 648 Magnet Power Supply */
-	{ USB_DEVICE(0x1FB9, 0x0700) }, /* Lake Shore Model 737 VSM Controller */
-	{ USB_DEVICE(0x1FB9, 0x0701) }, /* Lake Shore Model 776 Hall Matrix */
 	{ USB_DEVICE(0x3195, 0xF190) }, /* Link Instruments MSO-19 */
 	{ USB_DEVICE(0x3195, 0xF280) }, /* Link Instruments MSO-28 */
 	{ USB_DEVICE(0x3195, 0xF281) }, /* Link Instruments MSO-28 */
@@ -198,6 +174,7 @@ static struct usb_driver cp210x_driver = {
 	.probe		= usb_serial_probe,
 	.disconnect	= usb_serial_disconnect,
 	.id_table	= id_table,
+	.no_dynamic_id	= 	1,
 };
 
 static struct usb_serial_driver cp210x_device = {
@@ -205,6 +182,7 @@ static struct usb_serial_driver cp210x_device = {
 		.owner =	THIS_MODULE,
 		.name = 	"cp210x",
 	},
+	.usb_driver		= &cp210x_driver,
 	.id_table		= id_table,
 	.num_ports		= 1,
 	.bulk_in_size		= 256,
@@ -218,10 +196,6 @@ static struct usb_serial_driver cp210x_device = {
 	.attach			= cp210x_startup,
 	.release		= cp210x_release,
 	.dtr_rts		= cp210x_dtr_rts
-};
-
-static struct usb_serial_driver * const serial_drivers[] = {
-	&cp210x_device, NULL
 };
 
 /* Config request types */
@@ -335,12 +309,9 @@ static int cp210x_get_config(struct usb_serial_port *port, u8 request,
 
 	if (result != size) {
 		dbg("%s - Unable to send config request, "
-				"request=0x%x size=%d result=%d",
+				"request=0x%x size=%d result=%d\n",
 				__func__, request, size, result);
-		if (result > 0)
-			result = -EPROTO;
-
-		return result;
+		return -EPROTO;
 	}
 
 	return 0;
@@ -392,12 +363,9 @@ static int cp210x_set_config(struct usb_serial_port *port, u8 request,
 
 	if ((size > 2 && result != size) || result < 0) {
 		dbg("%s - Unable to send request, "
-				"request=0x%x size=%d result=%d",
+				"request=0x%x size=%d result=%d\n",
 				__func__, request, size, result);
-		if (result > 0)
-			result = -EPROTO;
-
-		return result;
+		return -EPROTO;
 	}
 
 	return 0;
@@ -457,15 +425,12 @@ static unsigned int cp210x_quantise_baudrate(unsigned int baud) {
 
 static int cp210x_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
-	int result;
-
 	dbg("%s - port %d", __func__, port->number);
 
-	result = cp210x_set_config_single(port, CP210X_IFC_ENABLE,
-								UART_ENABLE);
-	if (result) {
-		dev_err(&port->dev, "%s - Unable to enable UART\n", __func__);
-		return result;
+	if (cp210x_set_config_single(port, CP210X_IFC_ENABLE, UART_ENABLE)) {
+		dev_err(&port->dev, "%s - Unable to enable UART\n",
+				__func__);
+		return -EPROTO;
 	}
 
 	/* Configure the termios structure */
@@ -585,13 +550,18 @@ static void cp210x_get_termios_port(struct usb_serial_port *port,
 		cflag |= PARENB;
 		break;
 	case BITS_PARITY_MARK:
-		dbg("%s - parity = MARK", __func__);
-		cflag |= (PARENB|PARODD|CMSPAR);
+		dbg("%s - parity = MARK (not supported, disabling parity)",
+				__func__);
+		cflag &= ~PARENB;
+		bits &= ~BITS_PARITY_MASK;
+		cp210x_set_config(port, CP210X_SET_LINE_CTL, &bits, 2);
 		break;
 	case BITS_PARITY_SPACE:
-		dbg("%s - parity = SPACE", __func__);
-		cflag &= ~PARODD;
-		cflag |= (PARENB|CMSPAR);
+		dbg("%s - parity = SPACE (not supported, disabling parity)",
+				__func__);
+		cflag &= ~PARENB;
+		bits &= ~BITS_PARITY_MASK;
+		cp210x_set_config(port, CP210X_SET_LINE_CTL, &bits, 2);
 		break;
 	default:
 		dbg("%s - Unknown parity mode, disabling parity", __func__);
@@ -701,6 +671,7 @@ static void cp210x_set_termios(struct tty_struct *tty,
 	if (!tty)
 		return;
 
+	tty->termios->c_cflag &= ~CMSPAR;
 	cflag = tty->termios->c_cflag;
 	old_cflag = old_termios->c_cflag;
 
@@ -735,40 +706,30 @@ static void cp210x_set_termios(struct tty_struct *tty,
 		default:
 			dbg("cp210x driver does not "
 					"support the number of bits requested,"
-					" using 8 bit mode");
+					" using 8 bit mode\n");
 				bits |= BITS_DATA_8;
 				break;
 		}
 		if (cp210x_set_config(port, CP210X_SET_LINE_CTL, &bits, 2))
 			dbg("Number of data bits requested "
-					"not supported by device");
+					"not supported by device\n");
 	}
 
-	if ((cflag     & (PARENB|PARODD|CMSPAR)) !=
-	    (old_cflag & (PARENB|PARODD|CMSPAR))) {
+	if ((cflag & (PARENB|PARODD)) != (old_cflag & (PARENB|PARODD))) {
 		cp210x_get_config(port, CP210X_GET_LINE_CTL, &bits, 2);
 		bits &= ~BITS_PARITY_MASK;
 		if (cflag & PARENB) {
-			if (cflag & CMSPAR) {
-			    if (cflag & PARODD) {
-				    bits |= BITS_PARITY_MARK;
-				    dbg("%s - parity = MARK", __func__);
-			    } else {
-				    bits |= BITS_PARITY_SPACE;
-				    dbg("%s - parity = SPACE", __func__);
-			    }
+			if (cflag & PARODD) {
+				bits |= BITS_PARITY_ODD;
+				dbg("%s - parity = ODD", __func__);
 			} else {
-			    if (cflag & PARODD) {
-				    bits |= BITS_PARITY_ODD;
-				    dbg("%s - parity = ODD", __func__);
-			    } else {
-				    bits |= BITS_PARITY_EVEN;
-				    dbg("%s - parity = EVEN", __func__);
-			    }
+				bits |= BITS_PARITY_EVEN;
+				dbg("%s - parity = EVEN", __func__);
 			}
 		}
 		if (cp210x_set_config(port, CP210X_SET_LINE_CTL, &bits, 2))
-			dbg("Parity mode not supported by device");
+			dbg("Parity mode not supported "
+					"by device\n");
 	}
 
 	if ((cflag & CSTOPB) != (old_cflag & CSTOPB)) {
@@ -783,7 +744,7 @@ static void cp210x_set_termios(struct tty_struct *tty,
 		}
 		if (cp210x_set_config(port, CP210X_SET_LINE_CTL, &bits, 2))
 			dbg("Number of stop bits requested "
-					"not supported by device");
+					"not supported by device\n");
 	}
 
 	if ((cflag & CRTSCTS) != (old_cflag & CRTSCTS)) {
@@ -928,7 +889,35 @@ static void cp210x_release(struct usb_serial *serial)
 	}
 }
 
-module_usb_serial_driver(cp210x_driver, serial_drivers);
+static int __init cp210x_init(void)
+{
+	int retval;
+
+	retval = usb_serial_register(&cp210x_device);
+	if (retval)
+		return retval; /* Failed to register */
+
+	retval = usb_register(&cp210x_driver);
+	if (retval) {
+		/* Failed to register */
+		usb_serial_deregister(&cp210x_device);
+		return retval;
+	}
+
+	/* Success */
+	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
+	       DRIVER_DESC "\n");
+	return 0;
+}
+
+static void __exit cp210x_exit(void)
+{
+	usb_deregister(&cp210x_driver);
+	usb_serial_deregister(&cp210x_device);
+}
+
+module_init(cp210x_init);
+module_exit(cp210x_exit);
 
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_VERSION(DRIVER_VERSION);

@@ -22,7 +22,6 @@
 #if defined(CONFIG_BUSFREQ_OPP) && defined(CONFIG_CPU_EXYNOS5250)
 #include <mach/dev.h>
 #endif
-#include <plat/bts.h>
 #include <media/exynos_mc.h>
 #include <linux/cma.h>
 #include <asm/cacheflush.h>
@@ -125,7 +124,7 @@ static struct fimc_is_fmt *find_format(u32 *pixelformat,
 
 }
 
-static void set_plane_size(struct fimc_is_frame *frame, unsigned int sizes[])
+static void set_plane_size(struct fimc_is_frame *frame, unsigned long sizes[])
 {
 	dbg(" ");
 	switch (frame->format.pixelformat) {
@@ -187,14 +186,14 @@ static int fimc_is_scalerc_video_open(struct file *file)
 
 	if (!test_bit(FIMC_IS_STATE_FW_DOWNLOADED, &isp->pipe_state)) {
 		isp->sensor_num = 1;
-		dbg("++++ IS load fw (Scaler C open)\n");
+		printk(KERN_INFO "++++ IS load fw (Scaler C open)\n");
 		mutex_unlock(&isp->lock);
 		fimc_is_load_fw(isp);
 
 		set_bit(FIMC_IS_STATE_FW_DOWNLOADED, &isp->pipe_state);
 		clear_bit(FIMC_IS_STATE_SENSOR_INITIALIZED, &isp->pipe_state);
 		clear_bit(FIMC_IS_STATE_HW_STREAM_ON, &isp->pipe_state);
-		dbg("---- IS load fw (Scaler C open)\n");
+		printk(KERN_INFO "---- IS load fw (Scaler C open)\n");
 	} else {
 		mutex_unlock(&isp->lock);
 	}
@@ -218,7 +217,7 @@ static int fimc_is_scalerc_video_close(struct file *file)
 		!test_bit(FIMC_IS_STATE_3DNR_STREAM_ON, &isp->pipe_state) &&
 		test_bit(FIMC_IS_STATE_FW_DOWNLOADED, &isp->pipe_state)) {
 
-		dbg("++++ IS local power off (Scaler C close)\n");
+		printk(KERN_INFO "++++ IS local power off (Scaler C close)\n");
 		mutex_unlock(&isp->lock);
 		clear_bit(FIMC_IS_STATE_HW_STREAM_ON, &isp->pipe_state);
 		fimc_is_hw_subip_poweroff(isp);
@@ -243,7 +242,7 @@ static int fimc_is_scalerc_video_close(struct file *file)
 
 		fimc_is_hw_a5_power(isp, 0);
 		clear_bit(FIMC_IS_STATE_FW_DOWNLOADED, &isp->pipe_state);
-		dbg("---- IS local power off (Scaler C close)\n");
+		printk(KERN_INFO "---- IS local power off (Scaler C close)\n");
 	} else {
 		mutex_unlock(&isp->lock);
 	}
@@ -486,7 +485,7 @@ static int fimc_is_scalerc_video_enum_input(struct file *file, void *priv,
 	input->type = V4L2_INPUT_TYPE_CAMERA;
 
 	strncpy(input->name, sensor_info->sensor_name,
-					FIMC_IS_MAX_NAME_LEN);
+					FIMC_IS_MAX_SENSOR_NAME_LEN);
 	return 0;
 }
 
@@ -551,9 +550,8 @@ const struct v4l2_ioctl_ops fimc_is_scalerc_video_ioctl_ops = {
 };
 
 static int fimc_is_scalerc_queue_setup(struct vb2_queue *vq,
-			const struct v4l2_format *fmt,
 			unsigned int *num_buffers,
-			unsigned int *num_planes, unsigned int sizes[],
+			unsigned int *num_planes, unsigned long sizes[],
 			void *allocators[])
 {
 
@@ -589,8 +587,7 @@ static inline void fimc_is_scalerc_unlock(struct vb2_queue *vq)
 	dbg("%s\n", __func__);
 }
 
-static int fimc_is_scalerc_start_streaming(struct vb2_queue *q,
-						unsigned int count)
+static int fimc_is_scalerc_start_streaming(struct vb2_queue *q)
 {
 	struct fimc_is_video_dev *video = q->drv_priv;
 	struct fimc_is_dev	*isp = video->dev;
@@ -855,8 +852,7 @@ static void fimc_is_scalerc_buffer_queue(struct vb2_buffer *vb)
 	}
 
 	if (!test_bit(FIMC_IS_STATE_SCALERC_STREAM_ON, &isp->pipe_state))
-		fimc_is_scalerc_start_streaming(vb->vb2_queue,
-			isp->video[FIMC_IS_VIDEO_NUM_SCALERC].num_buf);
+		fimc_is_scalerc_start_streaming(vb->vb2_queue);
 
 	return;
 }
@@ -899,15 +895,14 @@ static int fimc_is_scalerp_video_open(struct file *file)
 	mutex_lock(&isp->lock);
 	if (!test_bit(FIMC_IS_STATE_FW_DOWNLOADED, &isp->pipe_state)) {
 		isp->sensor_num = 1;
-		dbg("++++ IS load fw (Scaler P open)\n");
+		printk(KERN_INFO "++++ IS load fw (Scaler P open)\n");
 		mutex_unlock(&isp->lock);
 		fimc_is_load_fw(isp);
-		bts_change_bus_traffic(&isp->pdev->dev, BTS_INCREASE_BW);
 
 		set_bit(FIMC_IS_STATE_FW_DOWNLOADED, &isp->pipe_state);
 		clear_bit(FIMC_IS_STATE_SENSOR_INITIALIZED, &isp->pipe_state);
 		clear_bit(FIMC_IS_STATE_HW_STREAM_ON, &isp->pipe_state);
-		dbg("---- IS load fw (Scaler P open)\n");
+		printk(KERN_INFO "---- IS load fw (Scaler P open)\n");
 	} else {
 		mutex_unlock(&isp->lock);
 	}
@@ -931,7 +926,7 @@ static int fimc_is_scalerp_video_close(struct file *file)
 		!test_bit(FIMC_IS_STATE_3DNR_STREAM_ON, &isp->pipe_state) &&
 		test_bit(FIMC_IS_STATE_FW_DOWNLOADED, &isp->pipe_state)) {
 
-		dbg("++++ IS local power off (Scaler P close)\n");
+		printk(KERN_INFO "++++ IS local power off (Scaler P close)\n");
 		mutex_unlock(&isp->lock);
 		clear_bit(FIMC_IS_STATE_HW_STREAM_ON, &isp->pipe_state);
 		fimc_is_hw_subip_poweroff(isp);
@@ -955,9 +950,8 @@ static int fimc_is_scalerp_video_close(struct file *file)
 			sensor_info[isp->sensor.id_position]->csi_id);
 
 		fimc_is_hw_a5_power(isp, 0);
-		bts_change_bus_traffic(&isp->pdev->dev, BTS_DECREASE_BW);
 		clear_bit(FIMC_IS_STATE_FW_DOWNLOADED, &isp->pipe_state);
-		dbg("---- IS local power off (Scaler P close)\n");
+		printk(KERN_INFO "---- IS local power off (Scaler P close)\n");
 	} else {
 		mutex_unlock(&isp->lock);
 	}
@@ -1202,7 +1196,7 @@ static int fimc_is_scalerp_video_enum_input(struct file *file, void *priv,
 	input->type = V4L2_INPUT_TYPE_CAMERA;
 
 	strncpy(input->name, sensor_info->sensor_name,
-					FIMC_IS_MAX_NAME_LEN);
+					FIMC_IS_MAX_SENSOR_NAME_LEN);
 	return 0;
 }
 
@@ -1724,9 +1718,9 @@ const struct v4l2_ioctl_ops fimc_is_scalerp_video_ioctl_ops = {
 };
 
 static int fimc_is_scalerp_queue_setup(struct vb2_queue *vq,
-			const struct v4l2_format *fmt,
 			unsigned int *num_buffers,
-			unsigned int *num_planes, unsigned int sizes[],
+			unsigned int *num_planes,
+			unsigned long sizes[],
 			void *allocators[])
 {
 
@@ -1763,8 +1757,7 @@ static inline void fimc_is_scalerp_unlock(struct vb2_queue *vq)
 	dbg("%s\n", __func__);
 }
 
-static int fimc_is_scalerp_start_streaming(struct vb2_queue *q,
-						unsigned int count)
+static int fimc_is_scalerp_start_streaming(struct vb2_queue *q)
 {
 	struct fimc_is_video_dev *video = q->drv_priv;
 	struct fimc_is_dev	*isp = video->dev;
@@ -2133,8 +2126,7 @@ static void fimc_is_scalerp_buffer_queue(struct vb2_buffer *vb)
 	}
 
 	if (!test_bit(FIMC_IS_STATE_SCALERP_STREAM_ON, &isp->pipe_state))
-		fimc_is_scalerp_start_streaming(vb->vb2_queue,
-			isp->video[FIMC_IS_VIDEO_NUM_SCALERP].num_buf);
+		fimc_is_scalerp_start_streaming(vb->vb2_queue);
 
 	return;
 }
@@ -2414,7 +2406,7 @@ static int fimc_is_3dnr_video_enum_input(struct file *file, void *priv,
 	input->type = V4L2_INPUT_TYPE_CAMERA;
 
 	strncpy(input->name, sensor_info->sensor_name,
-					FIMC_IS_MAX_NAME_LEN);
+					FIMC_IS_MAX_SENSOR_NAME_LEN);
 	return 0;
 }
 
@@ -2475,9 +2467,9 @@ const struct v4l2_ioctl_ops fimc_is_3dnr_video_ioctl_ops = {
 };
 
 static int fimc_is_3dnr_queue_setup(struct vb2_queue *vq,
-			const struct v4l2_format *fmt,
 			unsigned int *num_buffers,
-			unsigned int *num_planes, unsigned int sizes[],
+			unsigned int *num_planes,
+			unsigned long sizes[],
 			void *allocators[])
 {
 
@@ -2513,8 +2505,7 @@ static inline void fimc_is_3dnr_unlock(struct vb2_queue *vq)
 	dbg("%s\n", __func__);
 }
 
-static int fimc_is_3dnr_start_streaming(struct vb2_queue *q,
-						unsigned int count)
+static int fimc_is_3dnr_start_streaming(struct vb2_queue *q)
 {
 	struct fimc_is_video_dev *video = q->drv_priv;
 	struct fimc_is_dev	*isp = video->dev;
@@ -2772,8 +2763,7 @@ static void fimc_is_3dnr_buffer_queue(struct vb2_buffer *vb)
 	}
 
 	if (!test_bit(FIMC_IS_STATE_3DNR_STREAM_ON, &isp->pipe_state))
-		fimc_is_3dnr_start_streaming(vb->vb2_queue,
-			isp->video[FIMC_IS_VIDEO_NUM_3DNR].num_buf);
+		fimc_is_3dnr_start_streaming(vb->vb2_queue);
 
 	return;
 }
@@ -3084,7 +3074,7 @@ static int fimc_is_bayer_video_enum_input(struct file *file, void *priv,
 	input->type = V4L2_INPUT_TYPE_CAMERA;
 
 	strncpy(input->name, sensor_info->sensor_name,
-					FIMC_IS_MAX_NAME_LEN);
+					FIMC_IS_MAX_SENSOR_NAME_LEN);
 	return 0;
 }
 
@@ -3145,9 +3135,9 @@ const struct v4l2_ioctl_ops fimc_is_bayer_video_ioctl_ops = {
 };
 
 static int fimc_is_bayer_queue_setup(struct vb2_queue *vq,
-			const struct v4l2_format *fmt,
 			unsigned int *num_buffers,
-			unsigned int *num_planes, unsigned int sizes[],
+			unsigned int *num_planes,
+			unsigned long sizes[],
 			void *allocators[])
 {
 
@@ -3183,8 +3173,7 @@ static inline void fimc_is_bayer_unlock(struct vb2_queue *vq)
 	dbg("%s\n", __func__);
 }
 
-static int fimc_is_bayer_start_streaming(struct vb2_queue *q,
-						unsigned int count)
+static int fimc_is_bayer_start_streaming(struct vb2_queue *q)
 {
 	struct fimc_is_video_dev *video = q->drv_priv;
 	struct fimc_is_dev	*isp = video->dev;
@@ -3407,8 +3396,7 @@ static void fimc_is_bayer_buffer_queue(struct vb2_buffer *vb)
 	}
 
 	if (!test_bit(FIMC_IS_STATE_BAYER_STREAM_ON, &isp->pipe_state))
-		fimc_is_bayer_start_streaming(vb->vb2_queue,
-			isp->video[FIMC_IS_VIDEO_NUM_BAYER].num_buf);
+		fimc_is_bayer_start_streaming(vb->vb2_queue);
 
 	return;
 }
@@ -3422,3 +3410,4 @@ const struct vb2_ops fimc_is_bayer_qops = {
 	.start_streaming	= fimc_is_bayer_start_streaming,
 	.stop_streaming	= fimc_is_bayer_stop_streaming,
 };
+

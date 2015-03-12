@@ -16,14 +16,12 @@ struct sysmmu_platform_data {
 	char *dbgname;
 	/* comma(,) separated list of clock names for clock gating */
 	char *clockname;
-	unsigned int qos;
 };
 
 #define SYSMMU_DEVNAME_BASE "exynos-sysmmu"
 
 #define SYSMMU_CLOCK_NAME "sysmmu"
 #define SYSMMU_CLOCK_NAME2 "sysmmu_mc"
-#define SYSMMU_CLOCK_NAME3 "sysmmu_mc2"
 
 #ifdef CONFIG_EXYNOS_DEV_SYSMMU
 #include <linux/device.h>

@@ -28,7 +28,6 @@
 #include <linux/i2c.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
-#include <linux/export.h>
 #include "drmP.h"
 #include "drm.h"
 #include "drm_crtc.h"
@@ -1253,13 +1252,7 @@ static bool intel_sdvo_get_capabilities(struct intel_sdvo *intel_sdvo, struct in
 
 static int intel_sdvo_supports_hotplug(struct intel_sdvo *intel_sdvo)
 {
-	struct drm_device *dev = intel_sdvo->base.base.dev;
 	u8 response[2];
-
-	/* HW Erratum: SDVO Hotplug is broken on all i945G chips, there's noise
-	 * on the line. */
-	if (IS_I945G(dev) || IS_I945GM(dev))
-		return false;
 
 	return intel_sdvo_get_value(intel_sdvo, SDVO_CMD_GET_HOT_PLUG_SUPPORT,
 				    &response, 2) && response[0];
@@ -1581,14 +1574,11 @@ static void intel_sdvo_get_lvds_modes(struct drm_connector *connector)
 	 * Assume that the preferred modes are
 	 * arranged in priority order.
 	 */
-	intel_ddc_get_modes(connector, &intel_sdvo->ddc);
+	intel_ddc_get_modes(connector, intel_sdvo->i2c);
+	if (list_empty(&connector->probed_modes) == false)
+		goto end;
 
-	/*
-	 * Fetch modes from VBT. For SDVO prefer the VBT mode since some
-	 * SDVO->LVDS transcoders can't cope with the EDID mode. Since
-	 * drm_mode_probed_add adds the mode at the head of the list we add it
-	 * last.
-	 */
+	/* Fetch modes from VBT */
 	if (dev_priv->sdvo_lvds_vbt_mode != NULL) {
 		newmode = drm_mode_duplicate(connector->dev,
 					     dev_priv->sdvo_lvds_vbt_mode);
@@ -1600,6 +1590,7 @@ static void intel_sdvo_get_lvds_modes(struct drm_connector *connector)
 		}
 	}
 
+end:
 	list_for_each_entry(newmode, &connector->probed_modes, head) {
 		if (newmode->type & DRM_MODE_TYPE_PREFERRED) {
 			intel_sdvo->sdvo_lvds_fixed_mode =
@@ -2530,7 +2521,6 @@ bool intel_sdvo_init(struct drm_device *dev, int sdvo_reg)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct intel_encoder *intel_encoder;
 	struct intel_sdvo *intel_sdvo;
-	u32 hotplug_mask;
 	int i;
 
 	intel_sdvo = kzalloc(sizeof(struct intel_sdvo), GFP_KERNEL);
@@ -2561,17 +2551,10 @@ bool intel_sdvo_init(struct drm_device *dev, int sdvo_reg)
 		}
 	}
 
-	hotplug_mask = 0;
-	if (IS_G4X(dev)) {
-		hotplug_mask = IS_SDVOB(sdvo_reg) ?
-			SDVOB_HOTPLUG_INT_STATUS_G4X : SDVOC_HOTPLUG_INT_STATUS_G4X;
-	} else if (IS_GEN4(dev)) {
-		hotplug_mask = IS_SDVOB(sdvo_reg) ?
-			SDVOB_HOTPLUG_INT_STATUS_I965 : SDVOC_HOTPLUG_INT_STATUS_I965;
-	} else {
-		hotplug_mask = IS_SDVOB(sdvo_reg) ?
-			SDVOB_HOTPLUG_INT_STATUS_I915 : SDVOC_HOTPLUG_INT_STATUS_I915;
-	}
+	if (IS_SDVOB(sdvo_reg))
+		dev_priv->hotplug_supported_mask |= SDVOB_HOTPLUG_INT_STATUS;
+	else
+		dev_priv->hotplug_supported_mask |= SDVOC_HOTPLUG_INT_STATUS;
 
 	drm_encoder_helper_add(&intel_encoder->base, &intel_sdvo_helper_funcs);
 
@@ -2579,18 +2562,20 @@ bool intel_sdvo_init(struct drm_device *dev, int sdvo_reg)
 	if (!intel_sdvo_get_capabilities(intel_sdvo, &intel_sdvo->caps))
 		goto err;
 
+	/* Set up hotplug command - note paranoia about contents of reply.
+	 * We assume that the hardware is in a sane state, and only touch
+	 * the bits we think we understand.
+	 */
+	intel_sdvo_get_value(intel_sdvo, SDVO_CMD_GET_ACTIVE_HOT_PLUG,
+			     &intel_sdvo->hotplug_active, 2);
+	intel_sdvo->hotplug_active[0] &= ~0x3;
+
 	if (intel_sdvo_output_setup(intel_sdvo,
 				    intel_sdvo->caps.output_flags) != true) {
 		DRM_DEBUG_KMS("SDVO output failed to setup on SDVO%c\n",
 			      IS_SDVOB(sdvo_reg) ? 'B' : 'C');
 		goto err;
 	}
-
-	/* Only enable the hotplug irq if we need it, to work around noisy
-	 * hotplug lines.
-	 */
-	if (intel_sdvo->hotplug_active[0])
-		dev_priv->hotplug_supported_mask |= hotplug_mask;
 
 	intel_sdvo_select_ddc_bus(dev_priv, intel_sdvo, sdvo_reg);
 

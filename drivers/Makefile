@@ -5,8 +5,6 @@
 # Rewritten to use lists instead of if-statements.
 #
 
-# GPIO must come after pinctrl as gpios may need to mux pins etc
-obj-y				+= pinctrl/
 obj-y				+= gpio/
 obj-$(CONFIG_PCI)		+= pci/
 obj-$(CONFIG_PARISC)		+= parisc/
@@ -53,7 +51,6 @@ obj-$(CONFIG_ATA)		+= ata/
 obj-$(CONFIG_TARGET_CORE)	+= target/
 obj-$(CONFIG_MTD)		+= mtd/
 obj-$(CONFIG_SPI)		+= spi/
-obj-y				+= hsi/
 obj-y				+= net/
 obj-$(CONFIG_ATM)		+= atm/
 obj-$(CONFIG_FUSION)		+= message/
@@ -67,7 +64,7 @@ obj-$(CONFIG_SBUS)		+= sbus/
 obj-$(CONFIG_ZORRO)		+= zorro/
 obj-$(CONFIG_MAC)		+= macintosh/
 obj-$(CONFIG_ATA_OVER_ETH)	+= block/aoe/
-obj-$(CONFIG_PARIDE) 		+= block/paride/
+obj-$(CONFIG_PARIDE)		+= block/paride/
 obj-$(CONFIG_TC)		+= tc/
 obj-$(CONFIG_UWB)		+= uwb/
 obj-$(CONFIG_USB_OTG_UTILS)	+= usb/
@@ -83,12 +80,18 @@ obj-y				+= i2c/ media/
 obj-$(CONFIG_PPS)		+= pps/
 obj-$(CONFIG_PTP_1588_CLOCK)	+= ptp/
 obj-$(CONFIG_W1)		+= w1/
+obj-$(CONFIG_POWER_SUPPLY)	+= battery/
 obj-$(CONFIG_POWER_SUPPLY)	+= power/
 obj-$(CONFIG_HWMON)		+= hwmon/
 obj-$(CONFIG_THERMAL)		+= thermal/
 obj-$(CONFIG_WATCHDOG)		+= watchdog/
+obj-$(CONFIG_PHONE)		+= telephony/
 obj-$(CONFIG_MD)		+= md/
+ifeq ($(CONFIG_BT_TIZEN),y)
+obj-$(CONFIG_BT)		+= bluetooth_tizen/
+else
 obj-$(CONFIG_BT)		+= bluetooth/
+endif
 obj-$(CONFIG_ACCESSIBILITY)	+= accessibility/
 obj-$(CONFIG_ISDN)		+= isdn/
 obj-$(CONFIG_EDAC)		+= edac/
@@ -97,7 +100,7 @@ obj-$(CONFIG_EISA)		+= eisa/
 obj-y				+= lguest/
 obj-$(CONFIG_CPU_FREQ)		+= cpufreq/
 obj-$(CONFIG_CPU_IDLE)		+= cpuidle/
-obj-y				+= mmc/
+obj-$(CONFIG_MMC)		+= mmc/
 obj-$(CONFIG_MEMSTICK)		+= memstick/
 obj-y				+= leds/
 obj-$(CONFIG_SWITCH)		+= switch/
@@ -123,17 +126,30 @@ obj-y				+= platform/
 obj-y				+= ieee802154/
 #common clk code
 obj-y				+= clk/
-
 obj-$(CONFIG_HWSPINLOCK)	+= hwspinlock/
-obj-$(CONFIG_NFC_DEVICES)		+= nfc/
-obj-$(CONFIG_IOMMU_SUPPORT)	+= iommu/
-obj-$(CONFIG_REMOTEPROC)	+= remoteproc/
-obj-$(CONFIG_RPMSG)		+= rpmsg/
+obj-$(CONFIG_VIBETONZ)		+= motor/
 
-# Virtualization drivers
-obj-$(CONFIG_VIRT_DRIVERS)	+= virt/
-obj-$(CONFIG_HYPERV)		+= hv/
-
+obj-$(CONFIG_SENSORS_CORE)	+= sensor/
+obj-$(CONFIG_SENSORS_SSP)	+= sensorhub/
+obj-$(CONFIG_FM_RADIO)   += samsung/
 obj-$(CONFIG_PM_DEVFREQ)	+= devfreq/
+obj-$(CONFIG_SAMSUNG_PHONE_SVNET) += svnet/
+obj-$(CONFIG_PHONE_IPC_SPI) += phone_svn/
+obj-$(CONFIG_ACCESSORY)		+= accessory/
+obj-$(CONFIG_IR_REMOCON)	+= irda/
+obj-$(CONFIG_BARCODE_EMUL)	+= barcode_emul/
+obj-$(CONFIG_EXTCON)		+= extcon/
+obj-$(CONFIG_SAMSUNG_PHONE_TTY)	+= dpram/
+# Secure OS Mobicore
+obj-$(CONFIG_MOBICORE_SUPPORT)	+= gud/
 
-obj-$(CONFIG_MOBICORE_DRIVER)	+= gud/
+obj-$(CONFIG_IOMMU_SUPPORT)	+= iommu/
+
+obj-$(CONFIG_FELICA) += felica/
+
+obj-$(CONFIG_AUTHENTEC_VPNCLIENT_INTERCEPTOR) += interceptor/
+
+ifeq (1, $(shell if [ -d ./drivers/exfat ]; then echo 1; fi))
+obj-y	+= exfat/
+endif
+

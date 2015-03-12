@@ -17,9 +17,6 @@
 
 #include <plat/cpu.h>
 #include <linux/delay.h>
-#include <linux/ratelimit.h>
-#include <linux/debugfs.h>
-#include <linux/seq_file.h>
 
 /* Register access subroutines */
 
@@ -73,17 +70,6 @@ void mxr_layer_sync(struct mxr_device *mdev, int en)
 {
 	mxr_write_mask(mdev, MXR_STATUS, en ? MXR_STATUS_LAYER_SYNC : 0,
 		MXR_STATUS_LAYER_SYNC);
-}
-
-void mxr_vsync_enable_update(struct mxr_device *mdev)
-{
-	mxr_write_mask(mdev, MXR_CFG,    ~0, MXR_CFG_LAYER_UPDATE);
-	mxr_write_mask(mdev, MXR_STATUS, ~0, MXR_STATUS_SYNC_ENABLE);
-}
-
-void mxr_vsync_disable_update(struct mxr_device *mdev)
-{
-	mxr_write_mask(mdev, MXR_STATUS, 0, MXR_STATUS_SYNC_ENABLE);
 }
 
 void mxr_vsync_set_update(struct mxr_device *mdev, int en)
@@ -328,6 +314,10 @@ void mxr_reg_vp_format(struct mxr_device *mdev,
 void mxr_reg_graph_buffer(struct mxr_device *mdev, int idx, dma_addr_t addr)
 {
 	u32 val = addr ? ~0 : 0;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mdev->reg_slock, flags);
+	mxr_vsync_set_update(mdev, MXR_DISABLE);
 
 	if (idx == 0) {
 		mxr_write_mask(mdev, MXR_CFG, val, MXR_CFG_GRP0_ENABLE);
@@ -342,6 +332,9 @@ void mxr_reg_graph_buffer(struct mxr_device *mdev, int idx, dma_addr_t addr)
 		mxr_write_mask(mdev, MXR_CFG, val, MXR_CFG_MX1_GRP1_ENABLE);
 		mxr_write(mdev, MXR1_GRAPHIC_BASE(1), addr);
 	}
+
+	mxr_vsync_set_update(mdev, MXR_ENABLE);
+	spin_unlock_irqrestore(&mdev->reg_slock, flags);
 }
 
 void mxr_reg_vp_buffer(struct mxr_device *mdev,
@@ -462,21 +455,17 @@ void mxr_reg_set_pixel_blend(struct mxr_device *mdev, int sub_mxr, int num,
 
 	if (sub_mxr == MXR_SUB_MIXER0 && num == MXR_LAYER_GRP0)
 		mxr_write_mask(mdev, MXR_GRAPHIC_CFG(0), val,
-				MXR_GRP_CFG_PIXEL_BLEND_EN |
-				MXR_GRP_CFG_PRE_MUL_MODE);
+				MXR_GRP_CFG_PIXEL_BLEND_EN);
 	else if (sub_mxr == MXR_SUB_MIXER0 && num == MXR_LAYER_GRP1)
 		mxr_write_mask(mdev, MXR_GRAPHIC_CFG(1), val,
-				MXR_GRP_CFG_PIXEL_BLEND_EN |
-				MXR_GRP_CFG_PRE_MUL_MODE);
+				MXR_GRP_CFG_PIXEL_BLEND_EN);
 #if defined(CONFIG_ARCH_EXYNOS5)
 	else if (sub_mxr == MXR_SUB_MIXER1 && num == MXR_LAYER_GRP0)
 		mxr_write_mask(mdev, MXR1_GRAPHIC_CFG(0), val,
-				MXR_GRP_CFG_PIXEL_BLEND_EN |
-				MXR_GRP_CFG_PRE_MUL_MODE);
+				MXR_GRP_CFG_PIXEL_BLEND_EN);
 	else if (sub_mxr == MXR_SUB_MIXER1 && num == MXR_LAYER_GRP1)
 		mxr_write_mask(mdev, MXR1_GRAPHIC_CFG(1), val,
-				MXR_GRP_CFG_PIXEL_BLEND_EN |
-				MXR_GRP_CFG_PRE_MUL_MODE);
+				MXR_GRP_CFG_PIXEL_BLEND_EN);
 #endif
 
 	mxr_vsync_set_update(mdev, MXR_ENABLE);
@@ -532,25 +521,61 @@ void mxr_reg_colorkey_val(struct mxr_device *mdev, int sub_mxr, int num, u32 v)
 	spin_unlock_irqrestore(&mdev->reg_slock, flags);
 }
 
+static void mxr_irq_layer_handle(struct mxr_layer *layer)
+{
+	struct list_head *head = &layer->enq_list;
+	struct mxr_pipeline *pipe = &layer->pipe;
+	struct mxr_buffer *done;
+
+	/* skip non-existing layer */
+	if (layer == NULL)
+		return;
+
+	spin_lock(&layer->enq_slock);
+	if (pipe->state == MXR_PIPELINE_IDLE)
+		goto done;
+
+	done = layer->shadow_buf;
+	layer->shadow_buf = layer->update_buf;
+
+	if (list_empty(head)) {
+		if (pipe->state != MXR_PIPELINE_STREAMING)
+			layer->update_buf = NULL;
+	} else {
+		struct mxr_buffer *next;
+		next = list_first_entry(head, struct mxr_buffer, list);
+		list_del(&next->list);
+		layer->update_buf = next;
+	}
+
+	layer->ops.buffer_set(layer, layer->update_buf);
+
+	if (done && done != layer->shadow_buf)
+		vb2_buffer_done(&done->vb, VB2_BUF_STATE_DONE);
+
+done:
+	spin_unlock(&layer->enq_slock);
+}
+
 u32 mxr_irq_underrun_handle(struct mxr_device *mdev, u32 val)
 {
 	if (val & MXR_INT_STATUS_MX0_VIDEO) {
-		printk_ratelimited("mixer0 video layer underrun occur\n");
+		mxr_dbg(mdev, "mixer0 video layer underrun occur\n");
 		val |= MXR_INT_STATUS_MX0_VIDEO;
 	} else if (val & MXR_INT_STATUS_MX0_GRP0) {
-		printk_ratelimited("mixer0 graphic0 layer underrun occur\n");
+		mxr_dbg(mdev, "mixer0 graphic0 layer underrun occur\n");
 		val |= MXR_INT_STATUS_MX0_GRP0;
 	} else if (val & MXR_INT_STATUS_MX0_GRP1) {
-		printk_ratelimited("mixer0 graphic1 layer underrun occur\n");
+		mxr_dbg(mdev, "mixer0 graphic1 layer underrun occur\n");
 		val |= MXR_INT_STATUS_MX0_GRP1;
 	} else if (val & MXR_INT_STATUS_MX1_VIDEO) {
-		printk_ratelimited("mixer1 video layer underrun occur\n");
+		mxr_dbg(mdev, "mixer1 video layer underrun occur\n");
 		val |= MXR_INT_STATUS_MX1_VIDEO;
 	} else if (val & MXR_INT_STATUS_MX1_GRP0) {
-		printk_ratelimited("mixer1 graphic0 layer underrun occur\n");
+		mxr_dbg(mdev, "mixer1 graphic0 layer underrun occur\n");
 		val |= MXR_INT_STATUS_MX1_GRP0;
 	} else if (val & MXR_INT_STATUS_MX1_GRP1) {
-		printk_ratelimited("mixer1 graphic1 layer underrun occur\n");
+		mxr_dbg(mdev, "mixer1 graphic1 layer underrun occur\n");
 		val |= MXR_INT_STATUS_MX1_GRP1;
 	}
 
@@ -560,15 +585,15 @@ u32 mxr_irq_underrun_handle(struct mxr_device *mdev, u32 val)
 irqreturn_t mxr_irq_handler(int irq, void *dev_data)
 {
 	struct mxr_device *mdev = dev_data;
-	u32 val;
+	u32 i, val;
 
 	spin_lock(&mdev->reg_slock);
 	val = mxr_read(mdev, MXR_INT_STATUS);
 
 	/* wake up process waiting for VSYNC */
 	if (val & MXR_INT_STATUS_VSYNC) {
-		mdev->vsync_timestamp = ktime_get();
-		wake_up_interruptible_all(&mdev->vsync_wait);
+		set_bit(MXR_EVENT_VSYNC, &mdev->event_flags);
+		wake_up(&mdev->event_queue);
 	}
 
 	/* clear interrupts.
@@ -580,6 +605,24 @@ irqreturn_t mxr_irq_handler(int irq, void *dev_data)
 	mxr_write(mdev, MXR_INT_STATUS, val);
 
 	spin_unlock(&mdev->reg_slock);
+	/* leave on non-vsync event */
+	if (~val & MXR_INT_CLEAR_VSYNC)
+		return IRQ_HANDLED;
+
+	for (i = 0; i < MXR_MAX_SUB_MIXERS; ++i) {
+#if defined(CONFIG_ARCH_EXYNOS4)
+		mxr_irq_layer_handle(mdev->sub_mxr[i].layer[MXR_LAYER_VIDEO]);
+#endif
+		mxr_irq_layer_handle(mdev->sub_mxr[i].layer[MXR_LAYER_GRP0]);
+		mxr_irq_layer_handle(mdev->sub_mxr[i].layer[MXR_LAYER_GRP1]);
+	}
+
+	if (test_bit(MXR_EVENT_VSYNC, &mdev->event_flags)) {
+		spin_lock(&mdev->reg_slock);
+		mxr_write_mask(mdev, MXR_CFG, ~0, MXR_CFG_LAYER_UPDATE);
+		spin_unlock(&mdev->reg_slock);
+	}
+
 	return IRQ_HANDLED;
 }
 
@@ -617,20 +660,15 @@ void mxr_reg_streamoff(struct mxr_device *mdev)
 	spin_unlock_irqrestore(&mdev->reg_slock, flags);
 }
 
-static int mxr_update_pending(struct mxr_device *mdev)
+int mxr_reg_wait4vsync(struct mxr_device *mdev)
 {
-	return MXR_CFG_LAYER_UPDATE_COUNT(mxr_read(mdev, MXR_CFG));
-}
-
-int mxr_reg_wait4update(struct mxr_device *mdev)
-{
-	ktime_t timestamp = mdev->vsync_timestamp;
 	int ret;
 
-	ret = wait_event_interruptible_timeout(mdev->vsync_wait,
-		!ktime_equal(timestamp, mdev->vsync_timestamp)
-				&& !mxr_update_pending(mdev),
-		msecs_to_jiffies(100));
+	clear_bit(MXR_EVENT_VSYNC, &mdev->event_flags);
+	/* TODO: consider adding interruptible */
+	ret = wait_event_timeout(mdev->event_queue,
+		test_bit(MXR_EVENT_VSYNC, &mdev->event_flags),
+		msecs_to_jiffies(1000));
 	if (ret > 0)
 		return 0;
 	if (ret < 0)
@@ -640,7 +678,7 @@ int mxr_reg_wait4update(struct mxr_device *mdev)
 }
 
 void mxr_reg_set_mbus_fmt(struct mxr_device *mdev,
-		struct v4l2_mbus_framefmt *fmt, u32 dvi_mode)
+	struct v4l2_mbus_framefmt *fmt)
 {
 	u32 val = 0;
 	unsigned long flags;
@@ -651,13 +689,8 @@ void mxr_reg_set_mbus_fmt(struct mxr_device *mdev,
 	/* choosing between YUV444 and RGB888 as mixer output type */
 	if (mdev->sub_mxr[MXR_SUB_MIXER0].mbus_fmt[MXR_PAD_SOURCE_GRP0].code ==
 		V4L2_MBUS_FMT_YUV8_1X24) {
-		if (dvi_mode) {
-			val = MXR_CFG_OUT_RGB888;
-			fmt->code = V4L2_MBUS_FMT_XRGB8888_4X8_LE;
-		} else {
-			val = MXR_CFG_OUT_YUV444;
-			fmt->code = V4L2_MBUS_FMT_YUV8_1X24;
-		}
+		val = MXR_CFG_OUT_YUV444;
+		fmt->code = V4L2_MBUS_FMT_YUV8_1X24;
 	} else {
 		val = MXR_CFG_OUT_RGB888;
 		fmt->code = V4L2_MBUS_FMT_XRGB8888_4X8_LE;
@@ -692,19 +725,6 @@ void mxr_reg_set_mbus_fmt(struct mxr_device *mdev,
 	spin_unlock_irqrestore(&mdev->reg_slock, flags);
 }
 
-void mxr_reg_set_color_range(struct mxr_device *mdev)
-{
-	mxr_write(mdev, MXR_CM_COEFF_Y,
-			(1 << 30) | (94 << 20) | (314 << 10) | (32 << 0));
-	mxr_write(mdev, MXR_CM_COEFF_CB,
-			(972 << 20) | (851 << 10) | (225 << 0));
-	mxr_write(mdev, MXR_CM_COEFF_CR,
-			(225 << 20) | (820 << 10) | (1004 << 0));
-
-	mxr_write_mask(mdev, MXR_CFG, mdev->color_range << 9,
-				      MXR_CFG_COLOR_RANGE_MASK);
-}
-
 void mxr_reg_local_path_clear(struct mxr_device *mdev)
 {
 	u32 val;
@@ -712,8 +732,7 @@ void mxr_reg_local_path_clear(struct mxr_device *mdev)
 	val = readl(SYSREG_DISP1BLK_CFG);
 	val &= ~(DISP1BLK_CFG_MIXER0_VALID | DISP1BLK_CFG_MIXER1_VALID);
 	writel(val, SYSREG_DISP1BLK_CFG);
-	mxr_dbg(mdev, "SYSREG_DISP1BLK_CFG = 0x%x\n",
-			readl(SYSREG_DISP1BLK_CFG));
+	mxr_dbg(mdev, "SYSREG_DISP1BLK_CFG = 0x%x\n", readl(SYSREG_DISP1BLK_CFG));
 }
 
 void mxr_reg_local_path_set(struct mxr_device *mdev, int mxr0_gsc, int mxr1_gsc,
@@ -842,68 +861,6 @@ static void mxr_reg_vp_default_filter(struct mxr_device *mdev)
 	mxr_reg_vp_filter_set(mdev, VP_POLY4_C0_LL,
 		filter_cr_horiz_tap4, sizeof filter_cr_horiz_tap4);
 #endif
-}
-
-static int mxr_debugfs_show(struct seq_file *s, void *unused)
-{
-	struct mxr_device *mdev = s->private;
-
-	mutex_lock(&mdev->s_mutex);
-
-	if (!mdev->n_streamer) {
-		seq_printf(s, "Not streaming\n");
-		mutex_unlock(&mdev->s_mutex);
-		return 0;
-	}
-
-#define DUMPREG(reg_id) \
-do { \
-	seq_printf(s, "%-17s %08x\n", #reg_id, \
-		(u32)readl(mdev->res.mxr_regs + reg_id)); \
-} while (0)
-
-	DUMPREG(MXR_STATUS);
-	DUMPREG(MXR_CFG);
-	DUMPREG(MXR_INT_EN);
-	DUMPREG(MXR_INT_STATUS);
-	DUMPREG(MXR_LAYER_CFG);
-	DUMPREG(MXR_VIDEO_CFG);
-	DUMPREG(MXR_GRAPHIC0_CFG);
-	DUMPREG(MXR_GRAPHIC0_BASE);
-	DUMPREG(MXR_GRAPHIC0_SPAN);
-	DUMPREG(MXR_GRAPHIC0_WH);
-	DUMPREG(MXR_GRAPHIC0_SXY);
-	DUMPREG(MXR_GRAPHIC0_DXY);
-	DUMPREG(MXR_GRAPHIC1_CFG);
-	DUMPREG(MXR_GRAPHIC1_BASE);
-	DUMPREG(MXR_GRAPHIC1_SPAN);
-	DUMPREG(MXR_GRAPHIC1_WH);
-	DUMPREG(MXR_GRAPHIC1_SXY);
-	DUMPREG(MXR_GRAPHIC1_DXY);
-	DUMPREG(MXR_TVOUT_CFG);
-
-#undef DUMPREG
-
-	mutex_unlock(&mdev->s_mutex);
-	return 0;
-}
-
-static int mxr_debugfs_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, mxr_debugfs_show, inode->i_private);
-}
-
-static const struct file_operations mxr_debugfs_fops = {
-	.open           = mxr_debugfs_open,
-	.read           = seq_read,
-	.llseek         = seq_lseek,
-	.release        = single_release,
-};
-
-void mxr_debugfs_init(struct mxr_device *mdev)
-{
-	debugfs_create_file(dev_name(mdev->dev), S_IRUGO, NULL,
-			    mdev, &mxr_debugfs_fops);
 }
 
 static void mxr_reg_mxr_dump(struct mxr_device *mdev)

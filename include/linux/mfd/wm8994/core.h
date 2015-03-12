@@ -15,7 +15,6 @@
 #ifndef __MFD_WM8994_CORE_H__
 #define __MFD_WM8994_CORE_H__
 
-#include <linux/mutex.h>
 #include <linux/interrupt.h>
 
 enum wm8994_type {
@@ -26,7 +25,6 @@ enum wm8994_type {
 
 struct regulator_dev;
 struct regulator_bulk_data;
-struct regmap;
 
 #define WM8994_NUM_GPIO_REGS 11
 #define WM8994_NUM_LDO_REGS   2
@@ -53,14 +51,21 @@ struct regmap;
 #define WM8994_IRQ_GPIO(x) (x + WM8994_IRQ_TEMP_WARN)
 
 struct wm8994 {
+	struct mutex io_lock;
 	struct mutex irq_lock;
 
 	enum wm8994_type type;
+
 	int revision;
 	int cust_id;
 
 	struct device *dev;
-	struct regmap *regmap;
+	int (*read_dev)(struct wm8994 *wm8994, unsigned short reg,
+			int bytes, void *dest);
+	int (*write_dev)(struct wm8994 *wm8994, unsigned short reg,
+			 int bytes, const void *src);
+
+	void *control_data;
 
 	bool ldo_ena_always_driven;
 
@@ -68,10 +73,13 @@ struct wm8994 {
 	int irq_base;
 
 	int irq;
-	struct regmap_irq_chip_data *irq_data;
+	u16 irq_masks_cur[WM8994_NUM_IRQ_REGS];
+	u16 irq_masks_cache[WM8994_NUM_IRQ_REGS];
 
 	/* Used over suspend/resume */
 	bool suspended;
+	u16 ldo_regs[WM8994_NUM_LDO_REGS];
+	u16 gpio_regs[WM8994_NUM_GPIO_REGS];
 
 	struct regulator_dev *dbvdd;
 	int num_supplies;
@@ -95,6 +103,8 @@ static inline int wm8994_request_irq(struct wm8994 *wm8994, int irq,
 				     irq_handler_t handler, const char *name,
 				     void *data)
 {
+	if (!wm8994)
+		return -EINVAL;
 	if (!wm8994->irq_base)
 		return -EINVAL;
 	return request_threaded_irq(wm8994->irq_base + irq, NULL, handler,

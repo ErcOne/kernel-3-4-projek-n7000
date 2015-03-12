@@ -20,11 +20,20 @@
 #include <plat/gpio-cfg.h>
 #include <plat/clock.h>
 #include <plat/cpu.h>
+#include <plat/s5p-mfc.h>
 #include <plat/devs.h>
 
 #include <mach/regs-clock.h>
 #include <mach/map.h>
-#include <mach/exynos-mfc.h>
+
+unsigned int mfc_clk_rate;
+int exynos4_mfc_setup_clock(struct device *dev,
+		unsigned long clock_rate)
+{
+	mfc_clk_rate = clock_rate;
+
+	return 0;
+}
 
 static struct s5p_mfc_platdata default_mfc_pd __initdata = {
 	.clock_rate = 200 * MHZ,
@@ -32,12 +41,10 @@ static struct s5p_mfc_platdata default_mfc_pd __initdata = {
 
 void __init s5p_mfc_set_platdata(struct s5p_mfc_platdata *pd)
 {
-	struct s5p_mfc_platdata *npd;
-
 	if (!pd)
 		pd = &default_mfc_pd;
 
-	npd = s3c_set_platdata(pd, sizeof(struct s5p_mfc_platdata),
+	s3c_set_platdata(pd, sizeof(struct s5p_mfc_platdata),
 				&s5p_device_mfc);
 }
 

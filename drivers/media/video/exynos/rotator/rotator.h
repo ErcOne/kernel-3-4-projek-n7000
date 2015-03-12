@@ -17,7 +17,6 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/videodev2.h>
-#include <linux/videodev2_exynos_media.h>
 #include <linux/io.h>
 #include <media/videobuf2-core.h>
 #include <media/v4l2-ctrls.h>
@@ -26,7 +25,9 @@
 
 #include "rotator-regs.h"
 
-#if defined(CONFIG_VIDEOBUF2_ION)
+#if defined(CONFIG_VIDEOBUF2_CMA_PHYS)
+#include <media/videobuf2-cma-phys.h>
+#elif defined(CONFIG_VIDEOBUF2_ION)
 #include <media/videobuf2-ion.h>
 #endif
 
@@ -81,6 +82,10 @@ enum rot_status {
 	ROT_RUNNING_REMAIN,
 };
 
+enum rot_clk_status {
+	ROT_CLK_ON,
+	ROT_CLK_OFF,
+};
 /*
  * struct exynos_rot_size_limit - Rotator variant size  information
  *
@@ -184,6 +189,7 @@ struct rot_vb2;
  * @id:		Rotator device index (0..ROT_MAX_DEVS)
  * @clock:	clock required for Rotator operation
  * @regs:	the mapped hardware registers
+ * @regs_res:	the resource claimed for IO registers
  * @wait:	interrupt handler waitqueue
  * @ws:		work struct
  * @state:	device state flags
@@ -192,6 +198,7 @@ struct rot_vb2;
  * @slock:	the spinlock protecting this data structure
  * @lock:	the mutex protecting this data structure
  * @wdt:	watchdog timer information
+ * @clk_cnt:	rotator clock on/off count
  */
 struct rot_dev {
 	struct device			*dev;
@@ -201,6 +208,7 @@ struct rot_dev {
 	int				id;
 	struct clk			*clock;
 	void __iomem			*regs;
+	struct resource			*regs_res;
 	wait_queue_head_t		wait;
 	unsigned long			state;
 	struct vb2_alloc_ctx		*alloc_ctx;
@@ -208,6 +216,7 @@ struct rot_dev {
 	spinlock_t			slock;
 	struct mutex			lock;
 	struct rot_wdt			wdt;
+	atomic_t			clk_cnt;
 };
 
 /*
@@ -223,17 +232,17 @@ struct rot_dev {
  * @slock:		spinlock protecting this data structure
  */
 struct rot_ctx {
-	struct rot_dev		*rot_dev;
-	struct v4l2_m2m_ctx	*m2m_ctx;
-	struct rot_frame	s_frame;
-	struct rot_frame	d_frame;
+	struct rot_dev			*rot_dev;
+	struct v4l2_m2m_ctx		*m2m_ctx;
+	struct rot_frame		s_frame;
+	struct rot_frame		d_frame;
 	struct v4l2_ctrl_handler	ctrl_handler;
 	struct v4l2_fh			fh;
-	int			rotation;
-	u32			flip;
-	unsigned long		flags;
-	spinlock_t		slock;
-	bool			cacheable;
+	int				rotation;
+	u32				flip;
+	unsigned long			flags;
+	spinlock_t			slock;
+	bool				cacheable;
 };
 
 struct rot_vb2 {
@@ -288,7 +297,9 @@ void rot_hwset_irq_clear(struct rot_dev *rot, enum rot_irq_src *irq);
 void rot_hwget_status(struct rot_dev *rot, enum rot_status *state);
 void rot_dump_registers(struct rot_dev *rot);
 
-#if defined(CONFIG_VIDEOBUF2_ION)
+#if defined(CONFIG_VIDEOBUF2_CMA_PHYS)
+extern const struct rot_vb2 rot_vb2_cma;
+#elif defined(CONFIG_VIDEOBUF2_ION)
 extern const struct rot_vb2 rot_vb2_ion;
 #endif
 

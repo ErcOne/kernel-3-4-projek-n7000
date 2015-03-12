@@ -15,7 +15,6 @@
 
 #include <linux/ipv6.h>
 #include <linux/hardirq.h>
-#include <linux/jhash.h>
 #include <net/if_inet6.h>
 #include <net/ndisc.h>
 #include <net/flow.h>
@@ -110,9 +109,6 @@ struct frag_hdr {
 
 #define	IP6_MF	0x0001
 
-#define IP6_REPLY_MARK(net, mark) \
-	((net)->ipv6.sysctl.fwmark_reflect ? (mark) : 0)
-
 #include <net/sock.h>
 
 /* sysctls */
@@ -134,15 +130,6 @@ extern struct ctl_path net_ipv6_ctl_path[];
 	if (likely(_idev != NULL))					\
 		SNMP_INC_STATS_ATOMIC_LONG((_idev)->stats.statname##dev, (field)); \
 	SNMP_INC_STATS##modifier((net)->mib.statname##_statistics, (field));\
-})
-
-/* per device and per net counters are atomic_long_t */
-#define _DEVINC_ATOMIC_ATOMIC(net, statname, idev, field)		\
-({									\
-	struct inet6_dev *_idev = (idev);				\
-	if (likely(_idev != NULL))					\
-		SNMP_INC_STATS_ATOMIC_LONG((_idev)->stats.statname##dev, (field)); \
-	SNMP_INC_STATS_ATOMIC_LONG((net)->mib.statname##_statistics, (field));\
 })
 
 #define _DEVADD(net, statname, modifier, idev, field, val)		\
@@ -181,11 +168,11 @@ extern struct ctl_path net_ipv6_ctl_path[];
 		_DEVINCATOMIC(net, icmpv6, _BH, idev, field)
 
 #define ICMP6MSGOUT_INC_STATS(net, idev, field)		\
-	_DEVINC_ATOMIC_ATOMIC(net, icmpv6msg, idev, field +256)
+	_DEVINCATOMIC(net, icmpv6msg, , idev, field +256)
 #define ICMP6MSGOUT_INC_STATS_BH(net, idev, field)	\
-	_DEVINC_ATOMIC_ATOMIC(net, icmpv6msg, idev, field +256)
+	_DEVINCATOMIC(net, icmpv6msg, _BH, idev, field +256)
 #define ICMP6MSGIN_INC_STATS_BH(net, idev, field)	\
-	_DEVINC_ATOMIC_ATOMIC(net, icmpv6msg, idev, field)
+	_DEVINCATOMIC(net, icmpv6msg, _BH, idev, field)
 
 struct ip6_ra_chain {
 	struct ip6_ra_chain	*next;
@@ -333,6 +320,11 @@ ipv6_masked_addr_cmp(const struct in6_addr *a1, const struct in6_addr *m,
 		  ((a1->s6_addr32[3] ^ a2->s6_addr32[3]) & m->s6_addr32[3]));
 }
 
+static inline void ipv6_addr_copy(struct in6_addr *a1, const struct in6_addr *a2)
+{
+	memcpy(a1, a2, sizeof(struct in6_addr));
+}
+
 static inline void ipv6_addr_prefix(struct in6_addr *pfx, 
 				    const struct in6_addr *addr,
 				    int plen)
@@ -414,17 +406,6 @@ struct ip6_create_arg {
 void ip6_frag_init(struct inet_frag_queue *q, void *a);
 int ip6_frag_match(struct inet_frag_queue *q, void *a);
 
-/* more secured version of ipv6_addr_hash() */
-static inline u32 ipv6_addr_jhash(const struct in6_addr *a)
-{
-	u32 v = (__force u32)a->s6_addr32[0] ^ (__force u32)a->s6_addr32[1];
-
-	return jhash_3words(v,
-			    (__force u32)a->s6_addr32[2],
-			    (__force u32)a->s6_addr32[3],
-			    ipv6_hash_secret);
-}
-
 static inline int ipv6_addr_any(const struct in6_addr *a)
 {
 	return (a->s6_addr32[0] | a->s6_addr32[1] |
@@ -502,7 +483,7 @@ static inline int ipv6_addr_diff(const struct in6_addr *a1, const struct in6_add
 	return __ipv6_addr_diff(a1, a2, sizeof(struct in6_addr));
 }
 
-extern void ipv6_select_ident(struct frag_hdr *fhdr, struct rt6_info *rt);
+extern void ipv6_select_ident(struct frag_hdr *fhdr, struct in6_addr *addr);
 
 /*
  *	Prototypes exported by ipv6
@@ -525,8 +506,7 @@ extern int			ip6_rcv_finish(struct sk_buff *skb);
 extern int			ip6_xmit(struct sock *sk,
 					 struct sk_buff *skb,
 					 struct flowi6 *fl6,
-					 struct ipv6_txoptions *opt,
-					 int tclass);
+					 struct ipv6_txoptions *opt);
 
 extern int			ip6_nd_hdr(struct sock *sk,
 					   struct sk_buff *skb,
@@ -593,7 +573,7 @@ extern void			ipv6_push_frag_opts(struct sk_buff *skb,
 						    u8 *proto);
 
 extern int			ipv6_skip_exthdr(const struct sk_buff *, int start,
-					         u8 *nexthdrp, __be16 *frag_offp);
+					         u8 *nexthdrp);
 
 extern int 			ipv6_ext_hdr(u8 nexthdr);
 

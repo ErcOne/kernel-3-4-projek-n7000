@@ -25,7 +25,6 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/videodev2.h>
-#include <linux/videodev2_exynos_media.h>
 #include <media/v4l2-subdev.h>
 #include <media/exynos_mc.h>
 #include <plat/mipi_csis.h>
@@ -286,8 +285,7 @@ static int s5pcsis_clk_get(struct csis_state *state)
 	char clk_name[CLK_NAME_SIZE];
 
 	for (i = 0; i < NUM_CSIS_CLOCKS; i++) {
-		snprintf(clk_name, sizeof(clk_name), "%s%d",
-			 csi_clock_name[i], state->pdev->id);
+		sprintf(clk_name, "%s%d", csi_clock_name[i], state->pdev->id);
 		state->clock[i] = clk_get(dev, clk_name);
 		if (IS_ERR(state->clock[i])) {
 			s5pcsis_clk_put(state);
@@ -590,6 +588,7 @@ static struct exynos_md *csis_get_capture_md(enum mdev_node node)
 
 	ret = driver_for_each_device(drv, NULL, &md[0],
 				     csis_get_md_callback);
+	put_driver(drv);
 
 	return ret ? NULL : md[node];
 

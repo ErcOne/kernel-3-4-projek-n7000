@@ -11,7 +11,6 @@
 #include <linux/kernel.h>
 #include <linux/kmemcheck.h>
 #include <linux/slab.h>
-#include <linux/module.h>
 #include <net/inet_hashtables.h>
 #include <net/inet_timewait_sock.h>
 #include <net/ip.h>

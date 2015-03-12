@@ -105,13 +105,6 @@ enum analog_power_block {
 	POWER_ALL
 };
 
-enum aux_tx_terminal_resistor {
-	AUX_TX_37_5_OHM,
-	AUX_TX_45_OHM,
-	AUX_TX_50_OHM,
-	AUX_TX_65_OHM
-};
-
 struct video_info {
 	char *name;
 
@@ -128,21 +121,13 @@ struct video_info {
 	enum link_lane_count_type lane_count;
 };
 
-struct analog_param {
-	enum aux_tx_terminal_resistor aux_tx_terminal_resistor;
-	unsigned int tx_amplitude;
-};
-
 struct s5p_dp_platdata {
 	struct video_info *video_info;
-	struct analog_param *analog_param;
 
 	void (*phy_init)(void);
 	void (*phy_exit)(void);
 	void (*backlight_on)(void);
 	void (*backlight_off)(void);
-	void (*lcd_on)(void);
-	void (*lcd_off)(void);
 };
 
 #endif /* _S5P_DP_H */

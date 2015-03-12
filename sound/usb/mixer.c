@@ -299,7 +299,7 @@ static int get_ctl_value_v1(struct usb_mixer_elem_info *cval, int request, int v
 		idx = snd_usb_ctrl_intf(chip) | (cval->id << 8);
 		if (snd_usb_ctl_msg(chip->dev, usb_rcvctrlpipe(chip->dev, 0), request,
 				    USB_RECIP_INTERFACE | USB_TYPE_CLASS | USB_DIR_IN,
-				    validx, idx, buf, val_len) >= val_len) {
+				    validx, idx, buf, val_len, 100) >= val_len) {
 			*value_ret = convert_signed_value(cval, snd_usb_combine_bytes(buf, val_len));
 			err = 0;
 			goto out;
@@ -344,7 +344,7 @@ static int get_ctl_value_v2(struct usb_mixer_elem_info *cval, int request, int v
 		idx = snd_usb_ctrl_intf(chip) | (cval->id << 8);
 		ret = snd_usb_ctl_msg(chip->dev, usb_rcvctrlpipe(chip->dev, 0), bRequest,
 			      USB_RECIP_INTERFACE | USB_TYPE_CLASS | USB_DIR_IN,
-			      validx, idx, buf, size);
+			      validx, idx, buf, size, 1000);
 	}
 	up_read(&chip->shutdown_rwsem);
 	snd_usb_autosuspend(chip);
@@ -461,7 +461,7 @@ int snd_usb_mixer_set_ctl_value(struct usb_mixer_elem_info *cval,
 		if (snd_usb_ctl_msg(chip->dev,
 				    usb_sndctrlpipe(chip->dev, 0), request,
 				    USB_RECIP_INTERFACE | USB_TYPE_CLASS | USB_DIR_OUT,
-				    validx, idx, buf, val_len) >= 0) {
+				    validx, idx, buf, val_len, 100) >= 0) {
 			err = 0;
 			goto out;
 		}
@@ -711,9 +711,8 @@ static int check_input_term(struct mixer_build *state, int id, struct usb_audio_
 		case UAC2_CLOCK_SELECTOR: {
 			struct uac_selector_unit_descriptor *d = p1;
 			/* call recursively to retrieve the channel info */
-			err = check_input_term(state, d->baSourceID[0], term);
-			if (err < 0)
-				return err;
+			if (check_input_term(state, d->baSourceID[0], term) < 0)
+				return -ENODEV;
 			term->type = d->bDescriptorSubtype << 16; /* virtual type */
 			term->id = id;
 			term->name = uac_selector_unit_iSelector(d);
@@ -821,9 +820,6 @@ static void volume_control_quirks(struct usb_mixer_elem_info *cval,
 
 	case USB_ID(0x046d, 0x0808):
 	case USB_ID(0x046d, 0x0809):
-	case USB_ID(0x046d, 0x081b): /* HD Webcam c310 */
-	case USB_ID(0x046d, 0x081d): /* HD Webcam c510 */
-	case USB_ID(0x046d, 0x0825): /* HD Webcam c270 */
 	case USB_ID(0x046d, 0x0991):
 	/* Most audio usb devices lie about volume resolution.
 	 * Most Logitech webcams have res = 384.
@@ -963,7 +959,7 @@ static int mixer_ctl_feature_info(struct snd_kcontrol *kcontrol, struct snd_ctl_
 		if (!cval->initialized) {
 			get_min_max_with_quirks(cval, 0, kcontrol);
 			if (cval->initialized && cval->dBmin >= cval->dBmax) {
-				kcontrol->vd[0].access &= 
+				kcontrol->vd[0].access &=
 					~(SNDRV_CTL_ELEM_ACCESS_TLV_READ |
 					  SNDRV_CTL_ELEM_ACCESS_TLV_CALLBACK);
 				snd_ctl_notify(cval->mixer->chip->card,
@@ -1266,9 +1262,8 @@ static int parse_audio_feature_unit(struct mixer_build *state, int unitid, void 
 		return err;
 
 	/* determine the input source type and name */
-	err = check_input_term(state, hdr->bSourceID, &iterm);
-	if (err < 0)
-		return err;
+	if (check_input_term(state, hdr->bSourceID, &iterm) < 0)
+		return -EINVAL;
 
 	master_bits = snd_usb_combine_bytes(bmaControls, csize);
 	/* master configuration quirks */
@@ -1308,7 +1303,7 @@ static int parse_audio_feature_unit(struct mixer_build *state, int unitid, void 
 				build_feature_ctl(state, _ftr, 0, i, &iterm, unitid, 0);
 		}
 	} else { /* UAC_VERSION_2 */
-		for (i = 0; i < ARRAY_SIZE(audio_feature_info); i++) {
+		for (i = 0; i < 30/2; i++) {
 			unsigned int ch_bits = 0;
 			unsigned int ch_read_only = 0;
 
@@ -2029,7 +2024,7 @@ static int snd_usb_mixer_controls(struct usb_mixer_interface *mixer)
 			state.oterm.type = le16_to_cpu(desc->wTerminalType);
 			state.oterm.name = desc->iTerminal;
 			err = parse_audio_unit(&state, desc->bSourceID);
-			if (err < 0 && err != -EINVAL)
+			if (err < 0)
 				return err;
 		} else { /* UAC_VERSION_2 */
 			struct uac2_output_terminal_descriptor *desc = p;
@@ -2041,12 +2036,12 @@ static int snd_usb_mixer_controls(struct usb_mixer_interface *mixer)
 			state.oterm.type = le16_to_cpu(desc->wTerminalType);
 			state.oterm.name = desc->iTerminal;
 			err = parse_audio_unit(&state, desc->bSourceID);
-			if (err < 0 && err != -EINVAL)
+			if (err < 0)
 				return err;
 
 			/* for UAC2, use the same approach to also add the clock selectors */
 			err = parse_audio_unit(&state, desc->bCSourceID);
-			if (err < 0 && err != -EINVAL)
+			if (err < 0)
 				return err;
 		}
 	}

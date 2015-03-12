@@ -28,7 +28,6 @@
 #include <linux/string.h>
 #include <linux/delay.h>
 #include <media/v4l2-ioctl.h>
-#include <plat/bts.h>
 
 #include "gsc-core.h"
 
@@ -36,6 +35,16 @@ int gsc_out_hw_reset_off (struct gsc_dev *gsc)
 {
 	int ret;
 
+	if (!soc_is_exynos5250_rev1) {
+		gsc_hw_set_sw_reset(gsc);
+		ret = gsc_wait_reset(gsc);
+		if (ret < 0) {
+			gsc_err("gscaler s/w reset timeout");
+			return ret;
+		}
+		gsc_disp_fifo_sw_reset(gsc);
+		gsc_pixelasync_sw_reset(gsc);
+	}
 	gsc_hw_enable_control(gsc, false);
 	ret = gsc_wait_stop(gsc);
 	if (ret < 0) {
@@ -55,6 +64,16 @@ int gsc_out_hw_set(struct gsc_ctx *ctx)
 	if (ret) {
 		gsc_err("Scaler setup error");
 		return ret;
+	}
+
+	gsc_hw_set_mixer();
+	if (soc_is_exynos5250_rev1) {
+		gsc_hw_set_sw_reset(gsc);
+		ret = gsc_wait_reset(gsc);
+		if (ret < 0) {
+			gsc_err("gscaler s/w reset timeout");
+			return ret;
+		}
 	}
 
 	if (gsc_hw_get_mxr_path_status())
@@ -81,14 +100,6 @@ int gsc_out_hw_set(struct gsc_ctx *ctx)
 	gsc_hw_set_rotation(ctx);
 	gsc_hw_set_global_alpha(ctx);
 	gsc_hw_set_input_buf_mask_all(gsc);
-
-	gsc_hw_enable_control(gsc, true);
-	ret = gsc_wait_operating(gsc);
-	if (ret < 0) {
-		gsc_err("wait operation timeout");
-		return -EINVAL;
-	}
-	gsc_pipeline_s_stream(gsc, true);
 
 	return 0;
 }
@@ -269,6 +280,7 @@ static int gsc_subdev_s_stream(struct v4l2_subdev *sd, int enable)
 	int ret;
 
 	if (enable) {
+		pm_runtime_get_sync(&gsc->pdev->dev);
 		ret = gsc_out_hw_set(gsc->out.ctx);
 		if (ret) {
 			gsc_err("GSC H/W setting is failed");
@@ -277,12 +289,7 @@ static int gsc_subdev_s_stream(struct v4l2_subdev *sd, int enable)
 	} else {
 		INIT_LIST_HEAD(&gsc->out.active_buf_q);
 		clear_bit(ST_OUTPUT_STREAMON, &gsc->state);
-		bts_change_bus_traffic(&gsc->pdev->dev, BTS_DECREASE_BW);
 		pm_runtime_put_sync(&gsc->pdev->dev);
-		if (gsc->int_poll_hd) {
-			exynos5_bus_int_put(gsc->int_poll_hd);
-			gsc->int_poll_hd = NULL;
-		}
 	}
 
 	return 0;
@@ -426,9 +433,8 @@ static int gsc_output_reqbufs(struct file *file, void *priv,
 		gsc_ctx_state_lock_clear(GSC_SRC_FMT | GSC_DST_FMT,
 					 out->ctx);
 
-	gsc_set_protected_content(gsc, out->ctx->gsc_ctrls.drm_en->cur.val);
-
 	frame = ctx_get_frame(out->ctx, reqbufs->type);
+	update_use_sysmmu(gsc->vb2, out->ctx->gsc_ctrls.use_sysmmu);
 	frame->cacheable = out->ctx->gsc_ctrls.cacheable->val;
 	gsc->vb2->set_cacheable(gsc->alloc_ctx, frame->cacheable);
 	ret = vb2_reqbufs(&out->vbq, reqbufs);
@@ -616,7 +622,7 @@ static int gsc_out_video_s_stream(struct gsc_dev *gsc, int enable)
 	return ret;
 }
 
-static int gsc_out_start_streaming(struct vb2_queue *q, unsigned int count)
+static int gsc_out_start_streaming(struct vb2_queue *q)
 {
 	struct gsc_ctx *ctx = q->drv_priv;
 	struct gsc_dev *gsc = ctx->gsc_dev;
@@ -653,22 +659,22 @@ static int gsc_out_stop_streaming(struct vb2_queue *q)
 	return ret;
 }
 
-static int gsc_out_queue_setup(struct vb2_queue *vq, const struct v4l2_format *fmt,
-				unsigned int *num_buffers, unsigned int *num_planes,
-				unsigned int sizes[], void *allocators[])
+static int gsc_out_queue_setup(struct vb2_queue *vq, unsigned int *num_buffers,
+		       unsigned int *num_planes, unsigned long sizes[],
+		       void *allocators[])
 {
 	struct gsc_ctx *ctx = vq->drv_priv;
-	struct gsc_fmt *ffmt = ctx->s_frame.fmt;
+	struct gsc_fmt *fmt = ctx->s_frame.fmt;
 	int i;
 
-	if (IS_ERR(ffmt)) {
+	if (IS_ERR(fmt)) {
 		gsc_err("Invalid source format");
-		return PTR_ERR(ffmt);
+		return PTR_ERR(fmt);
 	}
 
-	*num_planes = ffmt->num_planes;
+	*num_planes = fmt->num_planes;
 
-	for (i = 0; i < ffmt->num_planes; i++) {
+	for (i = 0; i < fmt->num_planes; i++) {
 		sizes[i] = get_plane_size(&ctx->s_frame, i);
 		allocators[i] = ctx->gsc_dev->alloc_ctx;
 	}
@@ -722,49 +728,30 @@ static void gsc_out_buffer_queue(struct vb2_buffer *vb)
 	unsigned long flags;
 	int ret;
 
-	if (vb->acquire_fence) {
-		ret = sync_fence_wait(vb->acquire_fence, 100);
-		sync_fence_put(vb->acquire_fence);
-		vb->acquire_fence = NULL;
-		if (ret < 0) {
-			gsc_err("synce_fence_wait() timeout");
-			return;
-		}
-	}
-
-	if (!test_and_set_bit(ST_OUTPUT_STREAMON, &gsc->state)) {
-		if (!gsc->int_poll_hd) {
-			gsc->int_poll_hd = exynos5_bus_int_poll();
-			if (!gsc->int_poll_hd)
-				gsc_err("failed to request busfreq poll");
-		}
-		ret = pm_runtime_get_sync(&gsc->pdev->dev);
-		if (ret < 0) {
-			gsc_err("fail to pm_runtime_get_sync()");
-			return;
-		}
-		gsc_hw_set_sw_reset(gsc);
-		ret = gsc_wait_reset(gsc);
-		if (ret < 0) {
-			gsc_err("gscaler s/w reset timeout");
-			return;
-		}
-		bts_change_bus_traffic(&gsc->pdev->dev, BTS_INCREASE_BW);
-	}
-
 	if (gsc->out.req_cnt >= atomic_read(&q->queued_count)) {
+		spin_lock_irqsave(&gsc->slock, flags);
 		ret = gsc_out_set_in_addr(gsc, ctx, buf, vb->v4l2_buf.index);
 		if (ret) {
 			gsc_err("Failed to prepare G-Scaler address");
+			spin_unlock_irqrestore(&gsc->slock, flags);
 			return;
 		}
-		spin_lock_irqsave(&gsc->slock, flags);
 		gsc_hw_set_input_buf_masking(gsc, vb->v4l2_buf.index, false);
 		gsc_hw_set_in_pingpong_update(gsc);
 		spin_unlock_irqrestore(&gsc->slock, flags);
 	} else {
 		gsc_err("All requested buffers have been queued already");
 		return;
+	}
+
+	if (!test_and_set_bit(ST_OUTPUT_STREAMON, &gsc->state)) {
+		gsc_hw_enable_control(gsc, true);
+		ret = gsc_wait_operating(gsc);
+		if (ret < 0) {
+			gsc_err("wait operation timeout");
+			return;
+		}
+		gsc_pipeline_s_stream(gsc, true);
 	}
 }
 
@@ -798,12 +785,10 @@ static int gsc_out_link_setup(struct media_entity *entity,
 				gsc->pipeline.disp = sd;
 				if (!strcmp(sd->name, name)) {
 					gsc->out.ctx->out_path = GSC_FIMD;
-					gsc_hw_set_local_dst(gsc->id,
-							GSC_FIMD, true);
+					gsc_hw_set_local_dst(gsc->id, GSC_FIMD, true);
 				} else {
 					gsc->out.ctx->out_path = GSC_MIXER;
-					gsc_hw_set_local_dst(gsc->id,
-							GSC_MIXER, true);
+					gsc_hw_set_local_dst(gsc->id, GSC_MIXER, true);
 				}
 			} else
 				gsc_err("G-Scaler source pad was linked already");
@@ -882,12 +867,6 @@ static int gsc_output_close(struct file *file)
 	struct gsc_dev *gsc = video_drvdata(file);
 
 	gsc_dbg("pid: %d, state: 0x%lx", task_pid_nr(current), gsc->state);
-
-	/* if we didn't properly sequence with the secure side to turn off
-	 * content protection, we may be left in a very bad state and the
-	 * only way to recover this reliably is to reboot.
-	 */
-	BUG_ON(gsc->protected_content);
 
 	clear_bit(ST_OUTPUT_OPEN, &gsc->state);
 	vb2_queue_release(&gsc->out.vbq);
@@ -1025,12 +1004,11 @@ int gsc_register_output_device(struct gsc_dev *gsc)
 
 	q = &gsc->out.vbq;
 	memset(q, 0, sizeof(*q));
-	q->name = vfd->name;
 	q->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	q->io_modes = VB2_MMAP | VB2_DMABUF;
+	q->io_modes = VB2_MMAP | VB2_USERPTR;
 	q->drv_priv = gsc->out.ctx;
 	q->ops = &gsc_output_qops;
-	q->mem_ops = gsc->vb2->ops;
+	q->mem_ops = gsc->vb2->ops;;
 	q->buf_struct_size = sizeof(struct gsc_input_buf);
 
 	vb2_queue_init(q);

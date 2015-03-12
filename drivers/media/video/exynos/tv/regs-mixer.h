@@ -129,11 +129,10 @@
 
 /* bits for MXR_CFG */
 #define MXR_CFG_LAYER_UPDATE            (1 << 31)
-#define MXR_CFG_LAYER_UPDATE_COUNT(x)   (((x) >> 29) & 3)
+#define MXR_CFG_LAYER_UPDATE_COUNTER    (3 << 29)
 #define MXR_CFG_MX1_GRP1_ENABLE		(1 << 15)
 #define MXR_CFG_MX1_GRP0_ENABLE		(1 << 14)
 #define MXR_CFG_MX1_VIDEO_ENABLE	(1 << 13)
-#define MXR_CFG_COLOR_RANGE_MASK	(3 << 9)
 #define MXR_CFG_OUT_YUV444		(0 << 8)
 #define MXR_CFG_OUT_RGB888		(1 << 8)
 #define MXR_CFG_OUT_MASK		(1 << 8)
@@ -155,7 +154,6 @@
 
 /* bits for MXR_GRAPHICn_CFG */
 #define MXR_GRP_CFG_BLANK_KEY_OFF	(1 << 21)
-#define MXR_GRP_CFG_PRE_MUL_MODE	(1 << 20)
 #define MXR_GRP_CFG_LAYER_BLEND_EN	(1 << 17)
 #define MXR_GRP_CFG_PIXEL_BLEND_EN	(1 << 16)
 #define MXR_GRP_CFG_FORMAT_VAL(x)	MXR_MASK_VAL(x, 11, 8)

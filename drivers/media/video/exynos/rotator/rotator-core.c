@@ -9,15 +9,16 @@
  * published by the Free Software Foundation.
 */
 
-#include <linux/module.h>
-#include <linux/kernel.h>
 #include <linux/version.h>
 #include <linux/platform_device.h>
+#include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/clk.h>
+#include <linux/io.h>
 #include <linux/slab.h>
-#include <linux/pm_runtime.h>
-
+#include <linux/videodev2.h>
+#include <linux/videodev2_exynos_media.h>
+#include <media/v4l2-dev.h>
 #include <media/v4l2-ioctl.h>
 #include <mach/videonode.h>
 
@@ -406,13 +407,13 @@ static int rot_v4l2_s_crop(struct file *file, void *fh, struct v4l2_crop *cr)
 	if (cr->c.left + cr->c.width > pixm->width) {
 		dev_warn(ctx->rot_dev->dev,
 			"out of bound left cropping size:left %d, width %d\n",
-				cr->c.left, cr->c.width);
+			cr->c.left, cr->c.width);
 		cr->c.left = pixm->width - cr->c.width;
 	}
 	if (cr->c.top + cr->c.height > pixm->height) {
 		dev_warn(ctx->rot_dev->dev,
 			"out of bound top cropping size:top %d, height %d\n",
-				cr->c.top, cr->c.height);
+			cr->c.top, cr->c.height);
 		cr->c.top = pixm->height - cr->c.height;
 	}
 
@@ -478,10 +479,9 @@ static int rot_ctx_stop_req(struct rot_ctx *ctx)
 	return ret;
 }
 
-static int rot_vb2_queue_setup(struct vb2_queue *vq,
-		const struct v4l2_format *fmt, unsigned int *num_buffers,
-		unsigned int *num_planes, unsigned int sizes[],
-		void *allocators[])
+static int rot_vb2_queue_setup(struct vb2_queue *vq, unsigned int *num_buffers,
+			       unsigned int *num_planes, unsigned long sizes[],
+			       void *alloc_ctxs[])
 {
 	struct rot_ctx *ctx = vb2_get_drv_priv(vq);
 	struct rot_frame *frame;
@@ -496,7 +496,7 @@ static int rot_vb2_queue_setup(struct vb2_queue *vq,
 	for (i = 0; i < frame->rot_fmt->num_planes; i++) {
 		sizes[i] = (frame->pix_mp.width * frame->pix_mp.height *
 				frame->rot_fmt->bitperpixel[i]) >> 3;
-		allocators[i] = ctx->rot_dev->alloc_ctx;
+		alloc_ctxs[i] = ctx->rot_dev->alloc_ctx;
 	}
 
 	return 0;
@@ -543,7 +543,7 @@ static void rot_vb2_unlock(struct vb2_queue *vq)
 	mutex_unlock(&ctx->rot_dev->lock);
 }
 
-static int rot_vb2_start_streaming(struct vb2_queue *vq, unsigned int count)
+static int rot_vb2_start_streaming(struct vb2_queue *vq)
 {
 	struct rot_ctx *ctx = vb2_get_drv_priv(vq);
 	set_bit(CTX_STREAMING, &ctx->flags);
@@ -768,6 +768,28 @@ static const struct v4l2_file_operations rot_v4l2_fops = {
 	.mmap		= rot_mmap,
 };
 
+static void rot_clock_gating(struct rot_dev *rot, enum rot_clk_status status)
+{
+	int clk_cnt;
+
+	if (status == ROT_CLK_ON) {
+		clk_cnt = atomic_inc_return(&rot->clk_cnt);
+		if (clk_cnt == 1) {
+			clk_enable(rot->clock);
+			rot->vb2->resume(rot->alloc_ctx);
+		}
+	} else if (status == ROT_CLK_OFF) {
+		clk_cnt = atomic_dec_return(&rot->clk_cnt);
+		if (clk_cnt == 0) {
+			rot->vb2->suspend(rot->alloc_ctx);
+			clk_disable(rot->clock);
+		} else if (clk_cnt < 0) {
+			dev_err(rot->dev, "rotator clock control is wrong!!\n");
+			atomic_set(&rot->clk_cnt, 0);
+		}
+	}
+}
+
 static void rot_watchdog(unsigned long arg)
 {
 	struct rot_dev *rot = (struct rot_dev *)arg;
@@ -777,7 +799,7 @@ static void rot_watchdog(unsigned long arg)
 
 	rot_dbg("timeout watchdog\n");
 	if (atomic_read(&rot->wdt.cnt) >= ROT_WDT_CNT) {
-		pm_runtime_put(rot->dev);
+		rot_clock_gating(rot, ROT_CLK_OFF);
 
 		rot_dbg("wakeup blocked process\n");
 		atomic_set(&rot->wdt.cnt, 0);
@@ -837,6 +859,8 @@ static irqreturn_t rot_irq_handler(int irq, void *priv)
 		rot_dump_registers(rot);
 	}
 
+	rot_clock_gating(rot, ROT_CLK_OFF);
+
 	ctx = v4l2_m2m_get_curr_priv(rot->m2m.m2m_dev);
 	if (!ctx || !ctx->m2m_ctx) {
 		dev_err(rot->dev, "current ctx is NULL\n");
@@ -862,8 +886,6 @@ static irqreturn_t rot_irq_handler(int irq, void *priv)
 		/* Wake up from CTX_ABORT state */
 		if (test_and_clear_bit(CTX_ABORT, &ctx->flags))
 			wake_up(&rot->wait);
-
-		pm_runtime_put(rot->dev);
 	} else {
 		dev_err(rot->dev, "failed to get the buffer done\n");
 	}
@@ -980,7 +1002,7 @@ static void rot_m2m_device_run(void *priv)
 		goto run_unlock;
 	}
 
-	pm_runtime_get_sync(ctx->rot_dev->dev);
+	rot_clock_gating(rot, ROT_CLK_ON);
 
 	s_frame = &ctx->s_frame;
 	d_frame = &ctx->d_frame;
@@ -1124,33 +1146,9 @@ static int rot_resume(struct device *dev)
 	return 0;
 }
 
-static int rot_runtime_suspend(struct device *dev)
-{
-	struct rot_dev *rot = dev_get_drvdata(dev);
-
-	rot->vb2->suspend(rot->alloc_ctx);
-
-	clk_disable(rot->clock);
-
-	return 0;
-}
-
-static int rot_runtime_resume(struct device *dev)
-{
-	struct rot_dev *rot = dev_get_drvdata(dev);
-
-	clk_enable(rot->clock);
-
-	rot->vb2->resume(rot->alloc_ctx);
-
-	return 0;
-}
-
 static const struct dev_pm_ops rot_pm_ops = {
 	.suspend		= rot_suspend,
 	.resume			= rot_resume,
-	.runtime_suspend	= rot_runtime_suspend,
-	.runtime_resume		= rot_runtime_resume,
 };
 
 static int rot_probe(struct platform_device *pdev)
@@ -1184,24 +1182,39 @@ static int rot_probe(struct platform_device *pdev)
 
 	/* Get memory resource and map SFR region. */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	rot->regs = devm_request_and_ioremap(&pdev->dev, res);
-	if (rot->regs == NULL) {
+	if (!res) {
+		dev_err(&pdev->dev, "failed to find the registers\n");
+		return -ENXIO;
+
+	}
+
+	rot->regs_res = request_mem_region(res->start, resource_size(res),
+			dev_name(&pdev->dev));
+	if (!rot->regs_res) {
 		dev_err(&pdev->dev, "failed to claim register region\n");
 		return -ENOENT;
 	}
 
+	rot->regs = ioremap(res->start, resource_size(res));
+	if (!rot->regs) {
+		dev_err(&pdev->dev, "failed to map register\n");
+		ret = -ENXIO;
+		goto err_req_region;
+	}
+
 	/* Get IRQ resource and register IRQ handler. */
 	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
-	if (res == NULL) {
+	if (!res) {
 		dev_err(&pdev->dev, "failed to get IRQ resource\n");
-		return -ENXIO;
+		ret = -ENXIO;
+		goto err_ioremap;
 	}
 
 	ret = devm_request_irq(&pdev->dev, res->start, rot_irq_handler, 0,
 			pdev->name, rot);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to install irq\n");
-		return ret;
+		goto err_ioremap;
 	}
 
 	atomic_set(&rot->wdt.cnt, 0);
@@ -1210,10 +1223,12 @@ static int rot_probe(struct platform_device *pdev)
 	rot->clock = clk_get(rot->dev, "rotator");
 	if (IS_ERR(rot->clock)) {
 		dev_err(&pdev->dev, "failed to get clock for rotator\n");
-		return -ENXIO;
+		goto err_ioremap;
 	}
 
-#if defined(CONFIG_VIDEOBUF2_ION)
+#if defined(CONFIG_VIDEOBUF2_CMA_PHYS)
+	rot->vb2 = &rot_vb2_cma;
+#elif defined(CONFIG_VIDEOBUF2_ION)
 	rot->vb2 = &rot_vb2_ion;
 #endif
 
@@ -1224,21 +1239,19 @@ static int rot_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(&pdev->dev, "failed to register m2m device\n");
 		ret = -EPERM;
-		goto err;
+		goto err_clk;
 	}
-
-	pm_runtime_enable(&pdev->dev);
-
-#ifndef CONFIG_PM_RUNTIME
-	rot_runtime_resume(&pdev->dev);
-#endif
-
 	dev_info(&pdev->dev, "rotator registered successfully\n");
 
 	return 0;
 
-err:
+err_clk:
 	clk_put(rot->clock);
+err_ioremap:
+	iounmap(rot->regs);
+err_req_region:
+	release_mem_region(rot->regs_res->start,
+			resource_size(rot->regs_res));
 	return ret;
 }
 
@@ -1248,14 +1261,11 @@ static int rot_remove(struct platform_device *pdev)
 
 	clk_put(rot->clock);
 
-	pm_runtime_disable(&pdev->dev);
-
-#ifndef CONFIG_PM_RUNTIME
-	rot_runtime_suspend(&pdev->dev);
-#endif
-
 	if (timer_pending(&rot->wdt.timer))
 		del_timer(&rot->wdt.timer);
+
+	release_mem_region(rot->regs_res->start,
+			resource_size(rot->regs_res));
 
 	return 0;
 }
@@ -1324,7 +1334,18 @@ static struct platform_driver rot_driver = {
 	}
 };
 
-module_platform_driver(rot_driver);
+static int __init rot_init(void)
+{
+	return platform_driver_register(&rot_driver);
+}
+
+static void __exit rot_exit(void)
+{
+	platform_driver_unregister(&rot_driver);
+}
+
+module_init(rot_init);
+module_exit(rot_exit);
 
 MODULE_AUTHOR("Sunyoung, Kang <sy0816.kang@samsung.com>");
 MODULE_AUTHOR("Ayoung, Sim <a.sim@samsung.com>");

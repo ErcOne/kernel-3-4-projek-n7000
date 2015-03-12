@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2010-2012 Samsung Electronics Co., Ltd.
+ * linux/arch/arm/mach-exynos/setup-i2c4.c
+ *
+ * Copyright (c) 2010 Samsung Electronics Co., Ltd.
  *
  * I2C4 GPIO configuration.
  *
@@ -17,18 +19,18 @@ struct platform_device; /* don't need the contents */
 
 void s3c_i2c4_cfg_gpio(struct platform_device *dev)
 {
+#if defined(CONFIG_MACH_U1_NA_USCC)
+s3c_gpio_cfgall_range(EXYNOS4_GPB(0), 1,
+		S3C_GPIO_OUTPUT, S3C_GPIO_PULL_NONE);
+#else
 	if (soc_is_exynos4210())
 		s3c_gpio_cfgall_range(EXYNOS4_GPB(2), 2,
-				      S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
-
-	else if (soc_is_exynos4212() || soc_is_exynos4412())
+			S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
+	else if (soc_is_exynos4212())
 		s3c_gpio_cfgall_range(EXYNOS4_GPB(0), 2,
-				      S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
-
-	else if (soc_is_exynos5250())
-		s3c_gpio_cfgall_range(EXYNOS5_GPA2(0), 2,
-				      S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
-
+			S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
 	else
-		pr_err("failed to configure gpio for i2c4\n");
+		s3c_gpio_cfgall_range(EXYNOS5_GPA2(0), 2,
+			S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
+#endif
 }

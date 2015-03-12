@@ -16,7 +16,6 @@
 #include <linux/scatterlist.h>
 #include <linux/dma-mapping.h>
 #include <linux/ion.h>
-#include <linux/exynos_ion.h>
 #include <linux/err.h>
 
 /* flags to vb2_ion_create_context
@@ -28,9 +27,9 @@
  */
 
 /* Allocate physically contiguous memory */
-#define VB2ION_CTX_PHCONTIG	ION_HEAP_CARVEOUT_MASK
+#define VB2ION_CTX_PHCONTIG	ION_HEAP_EXYNOS_CONTIG_MASK
 /* Allocate virtually contiguous memory */
-#define VB2ION_CTX_VMCONTIG	ION_HEAP_SYSTEM_MASK
+#define VB2ION_CTX_VMCONTIG	ION_HEAP_EXYNOS_MASK
 /* Provide device a virtual address space */
 #define VB2ION_CTX_IOMMU	(1 << (ION_NUM_HEAPS + 1))
 /* Non-cached mapping to user when mmap */
@@ -38,7 +37,7 @@
 
 /* flags for contents protection */
 #define VB2ION_CTX_DRM_MFCSH	ION_HEAP_EXYNOS_MFC_SH_MASK
-#define VB2ION_CTX_DRM_VIDEO	ION_HEAP_EXYNOS_MFC_OUTPUT_MASK
+#define VB2ION_CTX_DRM_VIDEO	ION_HEAP_EXYNOS_VIDEO_MASK
 #define VB2ION_CTX_DRM_MFCFW	ION_HEAP_EXYNOS_MFC_FW_MASK
 
 #define VB2ION_CTX_MASK_ION	(~((1 << (BITS_PER_LONG - 12)) - 1) \
@@ -93,7 +92,6 @@ void *vb2_ion_create_context(struct device *dev, size_t alignment, long flags);
 void vb2_ion_destroy_context(void *ctx);
 
 void vb2_ion_set_cached(void *ctx, bool cached);
-void vb2_ion_set_protected(void *ctx, bool ctx_protected);
 int vb2_ion_set_alignment(void *ctx, size_t alignment);
 
 /* Data type of the cookie returned by vb2_plane_cookie() function call.
@@ -103,7 +101,8 @@ int vb2_ion_set_alignment(void *ctx, size_t alignment);
  */
 struct vb2_ion_cookie {
 	dma_addr_t ioaddr;
-	struct sg_table	*sgt;
+	struct scatterlist *sg;
+	int nents;
 	off_t offset;
 };
 
@@ -121,8 +120,8 @@ static inline int vb2_ion_phys_address(void *cookie, phys_addr_t *phys_addr)
 	if (WARN_ON(!phys_addr || IS_ERR_OR_NULL(cookie)))
 		return -EINVAL;
 
-	if (vb2cookie->sgt->nents == 1)
-		*phys_addr = sg_phys(vb2cookie->sgt->sgl) + vb2cookie->offset;
+	if (vb2cookie->nents == 1)
+		*phys_addr = sg_phys(vb2cookie->sg) + vb2cookie->offset;
 	else
 		return -EINVAL;
 
@@ -169,8 +168,8 @@ static inline struct scatterlist *vb2_ion_get_sg(void *cookie, int *nents)
 	if (WARN_ON(!nents || IS_ERR_OR_NULL(cookie)))
 		return NULL;
 
-	*nents = vb2cookie->sgt->nents;
-	return vb2cookie->sgt->sgl;
+	*nents = vb2cookie->nents;
+	return vb2cookie->sg;
 }
 
 /***** Device's internal/context buffer support *****/
@@ -204,6 +203,7 @@ void vb2_ion_sync_for_device(void *cookie, off_t offset, size_t size,
 						enum dma_data_direction dir);
 void vb2_ion_sync_for_cpu(void *cookie, off_t offset, size_t size,
 						enum dma_data_direction dir);
+
 int vb2_ion_cache_flush(struct vb2_buffer *vb, u32 num_planes);
 int vb2_ion_cache_inv(struct vb2_buffer *vb, u32 num_planes);
 
@@ -216,6 +216,5 @@ int vb2_ion_attach_iommu(void *alloc_ctx);
 void vb2_ion_detach_iommu(void *alloc_ctx);
 
 extern const struct vb2_mem_ops vb2_ion_memops;
-extern struct ion_device *ion_exynos; /* drivers/gpu/ion/exynos/exynos-ion.c */
 
-#endif /* _MEDIA_VIDEOBUF2_ION_H */
+#endif

@@ -441,19 +441,15 @@ nouveau_page_flip_emit(struct nouveau_channel *chan,
 		goto fail;
 
 	/* Emit the pageflip */
-	ret = RING_SPACE(chan, 3);
+	ret = RING_SPACE(chan, 2);
 	if (ret)
 		goto fail;
 
-	if (dev_priv->card_type < NV_C0) {
+	if (dev_priv->card_type < NV_C0)
 		BEGIN_RING(chan, NvSubSw, NV_SW_PAGE_FLIP, 1);
-		OUT_RING  (chan, 0x00000000);
-		OUT_RING  (chan, 0x00000000);
-	} else {
-		BEGIN_NVC0(chan, 2, 0, NV10_SUBCHAN_REF_CNT, 1);
-		OUT_RING  (chan, ++chan->fence.sequence);
-		BEGIN_NVC0(chan, 8, 0, NVSW_SUBCHAN_PAGE_FLIP, 0x0000);
-	}
+	else
+		BEGIN_NVC0(chan, 2, NvSubM2MF, 0x0500, 1);
+	OUT_RING  (chan, 0);
 	FIRE_RING (chan);
 
 	ret = nouveau_fence_new(chan, pfence, true);
@@ -586,7 +582,7 @@ nouveau_display_dumb_create(struct drm_file *file_priv, struct drm_device *dev,
 	args->size = args->pitch * args->height;
 	args->size = roundup(args->size, PAGE_SIZE);
 
-	ret = nouveau_gem_new(dev, args->size, 0, NOUVEAU_GEM_DOMAIN_VRAM, 0, 0, &bo);
+	ret = nouveau_gem_new(dev, args->size, 0, TTM_PL_FLAG_VRAM, 0, 0, &bo);
 	if (ret)
 		return ret;
 

@@ -11,11 +11,10 @@
  * (at your option) any later version.
  */
 
-#ifndef LINUX_MMC_DW_MMC_H
-#define LINUX_MMC_DW_MMC_H
+#ifndef _LINUX_MMC_DW_MMC_H_
+#define _LINUX_MMC_DW_MMC_H_
 
 #include <linux/scatterlist.h>
-#include <linux/mmc/core.h>
 
 #define MAX_MCI_SLOTS	2
 
@@ -38,12 +37,17 @@ enum {
 
 struct mmc_data;
 
+struct dw_mci_next {
+	unsigned int	sg_len;
+	s32		cookie;
+};
+
 /**
  * struct dw_mci - MMC controller state shared between all slots
  * @lock: Spinlock protecting the queue and associated data.
  * @regs: Pointer to MMIO registers.
  * @sg: Scatterlist entry currently being processed by PIO code, if any.
- * @sg_miter: PIO mapping scatterlist iterator.
+ * @pio_offset: Offset into the current scatterlist entry.
  * @cur_slot: The slot which is currently using the controller.
  * @mrq: The request currently being processed on @cur_slot,
  *	or NULL if the controller is idle.
@@ -51,7 +55,6 @@ struct mmc_data;
  * @data: The data currently being transferred, or NULL if no data
  *	transfer is in progress.
  * @use_dma: Whether DMA channel is initialized or not.
- * @using_dma: Whether DMA is in use for the current transfer.
  * @sg_dma: Bus address of DMA buffer.
  * @sg_cpu: Virtual address of DMA buffer.
  * @dma_ops: Pointer to platform-specific DMA callbacks.
@@ -75,21 +78,14 @@ struct mmc_data;
  *	rate and timeout calculations.
  * @current_speed: Configured rate of the controller.
  * @num_slots: Number of slots available.
- * @verid: Denote Version ID.
- * @data_offset: Set the offset of DATA register according to VERID.
- * @dev: Device associated with the MMC controller.
+ * @pdev: Platform device associated with the MMC controller.
  * @pdata: Platform data associated with the MMC controller.
  * @slot: Slots sharing this MMC controller.
  * @fifo_depth: depth of FIFO.
  * @data_shift: log2 of FIFO item size.
- * @part_buf_start: Start index in part_buf.
- * @part_buf_count: Bytes of partial data in part_buf.
- * @part_buf: Simple buffer for partial fifo reads/writes.
  * @push_data: Pointer to FIFO push function.
  * @pull_data: Pointer to FIFO pull function.
  * @quirks: Set of quirks that apply to specific versions of the IP.
- * @irq_flags: The flags to be passed to request_irq.
- * @irq: The irq value to be passed to request_irq.
  *
  * Locking
  * =======
@@ -126,10 +122,8 @@ struct dw_mci {
 	struct mmc_request	*mrq;
 	struct mmc_command	*cmd;
 	struct mmc_data		*data;
-	struct mmc_command	stop;
-	bool			stop_snd;
-	struct clk		*hclk;
-	struct clk		*cclk;
+	struct clk          *hclk;
+	struct clk          *cclk;
 	bool			prv_err;
 
 	/* DMA interface members*/
@@ -139,57 +133,44 @@ struct dw_mci {
 	dma_addr_t		sg_dma;
 	void			*sg_cpu;
 	struct dw_mci_dma_ops	*dma_ops;
+	unsigned int		buf_size;
 #ifdef CONFIG_MMC_DW_IDMAC
 	unsigned int		ring_size;
 #else
 	struct dw_mci_dma_data	*dma_data;
 #endif
-	unsigned int		desc_sz;
 	u32			cmd_status;
 	u32			data_status;
 	u32			stop_cmdr;
 	u32			dir_status;
 	struct tasklet_struct	tasklet;
-	struct work_struct	card_work;
+	struct tasklet_struct	card_tasklet;
 	unsigned long		pending_events;
 	unsigned long		completed_events;
 	enum dw_mci_state	state;
 	struct list_head	queue;
 
 	u32			bus_hz;
-	u32			max_bus_hz;
 	u32			current_speed;
 	u32			num_slots;
 	u32			fifoth_val;
-	u32			cd_rd_thr;
 	u16			verid;
 	u16			data_offset;
-	struct device		dev;
+	struct platform_device	*pdev;
 	struct dw_mci_board	*pdata;
 	struct dw_mci_slot	*slot[MAX_MCI_SLOTS];
 
 	/* FIFO push and pull */
 	int			fifo_depth;
 	int			data_shift;
-	u8			part_buf_start;
-	u8			part_buf_count;
-	union {
-		u16		part_buf16;
-		u32		part_buf32;
-		u64		part_buf;
-	};
 	void (*push_data)(struct dw_mci *host, void *buf, int cnt);
 	void (*pull_data)(struct dw_mci *host, void *buf, int cnt);
 
 	/* Workaround flags */
 	u32			quirks;
 
-	/* S/W reset timer */
-	struct timer_list       timer;
-
 	struct regulator	*vmmc;	/* Power regulator */
-	unsigned long		irq_flags; /* IRQ flags */
-	unsigned int		irq;
+	struct dw_mci_next	next_data;
 };
 
 /* DMA ops for Internal/External DMAC interface */
@@ -199,7 +180,6 @@ struct dw_mci_dma_ops {
 	void (*start)(struct dw_mci *host, unsigned int sg_len);
 	void (*complete)(struct dw_mci *host);
 	void (*stop)(struct dw_mci *host);
-	void (*reset)(struct dw_mci *host);
 	void (*cleanup)(struct dw_mci *host);
 	void (*exit)(struct dw_mci *host);
 };
@@ -213,17 +193,13 @@ struct dw_mci_dma_ops {
 #define DW_MCI_QUIRK_HIGHSPEED			BIT(2)
 /* Unreliable card detection */
 #define DW_MCI_QUIRK_BROKEN_CARD_DETECTION	BIT(3)
-/* No detect end bit during read */
-#define DW_MCI_QUIRK_NO_DETECT_EBIT             BIT(4)
-/* Hardware reset using power off/on of card */
-#define DW_MMC_QUIRK_HW_RESET_PW 		BIT(5)
 
 enum dw_mci_cd_types {
-	DW_MCI_CD_INTERNAL,	/* use mmc internal CD line */
-	DW_MCI_CD_EXTERNAL,	/* use external callback */
-	DW_MCI_CD_GPIO,		/* use external gpio pin for CD line */
-	DW_MCI_CD_NONE,		/* no CD line, use polling to detect card */
-	DW_MCI_CD_PERMANENT,	/* no CD line, card permanently wired to host */
+	DW_MCI_CD_INTERNAL,  /* use mmc internal CD line */
+	DW_MCI_CD_EXTERNAL,  /* use external callback */
+	DW_MCI_CD_GPIO,      /* use external gpio pin for CD line */
+	DW_MCI_CD_NONE,      /* no CD line, use polling to detect card */
+	DW_MCI_CD_PERMANENT, /* no CD line, card permanently wired to host */
 };
 
 struct dma_pdata;
@@ -242,18 +218,17 @@ struct dw_mci_board {
 
 	u32 quirks; /* Workaround / Quirk flags */
 	unsigned int bus_hz; /* Bus speed */
-	unsigned int max_bus_hz; /* MAXIMUM Bus speed */
 
 	unsigned int caps;	/* Capabilities */
 	unsigned int caps2;	/* More capabilities */
-	unsigned int pm_caps;	/* supported pm features */
-
 	/*
 	 * Override fifo depth. If 0, autodetect it from the FIFOTH register,
 	 * but note that this may not be reliable after a bootloader has used
 	 * it.
 	 */
 	unsigned int fifo_depth;
+
+	unsigned int buf_size;	/* Buffer size */
 
 	/* delay in mS before detecting cards after interrupt */
 	u32 detect_delay_ms;
@@ -267,34 +242,26 @@ struct dw_mci_board {
 	int (*get_ocr)(u32 slot_id);
 	int (*get_bus_wd)(u32 slot_id);
 	void (*cfg_gpio)(int width);
-	void (*hw_reset)(u32 slot_id);
 	void (*set_io_timing)(void *data, unsigned char timing);
 
 	/* Phase Shift Value */
 	unsigned int sdr_timing;
 	unsigned int ddr_timing;
-	u8 clk_drv;
-	u8 clk_smpl;
-	bool tuned;
 
 	/* cd_type: Type of Card Detection method (see cd_types enum above) */
+
 	enum dw_mci_cd_types cd_type;
 
-	/* Number of descriptors */
-	unsigned int desc_sz;
-
 	/* ext_cd_cleanup: Cleanup external card detect subsystem.
-	* ext_cd_init: Initialize external card detect subsystem.
-	*	notify_func argument is a callback to the dwmci driver
-	*	that triggers the card detection event. Callback arguments:
-	*	dev is pointer to platform device of the host controller,
-	*	state is new state of the card (0 - removed, 1 - inserted).
-	*/
+	 * ext_cd_init: Initialize external card detect subsystem.
+	 *  		notify_func argument is a callback to the dwmci driver
+	 *  		that triggers the card detection event. Callback arguments:
+	 * 		dev is pointer to platform device of the host controller,
+	 *		state is new state of the card (0 - removed, 1 - inserted).
+	 */
 
-	int (*ext_cd_init)(void (*notify_func)
-		(struct platform_device *, int state));
-	int (*ext_cd_cleanup)(void (*notify_func)
-		(struct platform_device *, int state));
+	int (*ext_cd_init)(void (*notify_func)(struct platform_device *, int state));
+	int (*ext_cd_cleanup)(void (*notify_func)(struct platform_device *,int state));
 
 	/*
 	 * Enable power to selected slot and set voltage to desired level.
@@ -310,4 +277,4 @@ struct dw_mci_board {
 	struct block_settings *blk_settings;
 };
 
-#endif /* LINUX_MMC_DW_MMC_H */
+#endif /* _LINUX_MMC_DW_MMC_H_ */

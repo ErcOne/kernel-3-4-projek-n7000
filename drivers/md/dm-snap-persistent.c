@@ -10,7 +10,6 @@
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 #include <linux/vmalloc.h>
-#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/dm-io.h>
 
@@ -175,9 +174,10 @@ static int alloc_area(struct pstore *ps)
 	if (!ps->area)
 		goto err_area;
 
-	ps->zero_area = vzalloc(len);
+	ps->zero_area = vmalloc(len);
 	if (!ps->zero_area)
 		goto err_zero_area;
+	memset(ps->zero_area, 0, len);
 
 	ps->header_area = vmalloc(len);
 	if (!ps->header_area)
@@ -256,7 +256,7 @@ static int chunk_io(struct pstore *ps, void *area, chunk_t chunk, int rw,
 	 */
 	INIT_WORK_ONSTACK(&req.work, do_metadata);
 	queue_work(ps->metadata_wq, &req.work);
-	flush_workqueue(ps->metadata_wq);
+	flush_work(&req.work);
 
 	return req.result;
 }
@@ -568,7 +568,7 @@ static int persistent_read_metadata(struct dm_exception_store *store,
 	ps->exceptions_per_area = (ps->store->chunk_size << SECTOR_SHIFT) /
 				  sizeof(struct disk_exception);
 	ps->callbacks = dm_vcalloc(ps->exceptions_per_area,
-				   sizeof(*ps->callbacks));
+			sizeof(*ps->callbacks));
 	if (!ps->callbacks)
 		return -ENOMEM;
 
@@ -675,7 +675,7 @@ static void persistent_commit_exception(struct dm_exception_store *store,
 	 * If we completely filled the current area, then wipe the next one.
 	 */
 	if ((ps->current_committed == ps->exceptions_per_area) &&
-	    zero_disk_area(ps, ps->current_area + 1))
+	     zero_disk_area(ps, ps->current_area + 1))
 		ps->valid = 0;
 
 	/*

@@ -148,7 +148,7 @@ struct pcpu_tstats {
 	unsigned long	rx_bytes;
 	unsigned long	tx_packets;
 	unsigned long	tx_bytes;
-} __attribute__((aligned(4*sizeof(unsigned long))));
+};
 
 static struct net_device_stats *ipip_get_stats(struct net_device *dev)
 {
@@ -303,7 +303,7 @@ static void ipip_tunnel_uninit(struct net_device *dev)
 	struct ipip_net *ipn = net_generic(net, ipip_net_id);
 
 	if (dev == ipn->fb_tunnel_dev)
-		RCU_INIT_POINTER(ipn->tunnels_wc[0], NULL);
+		rcu_assign_pointer(ipn->tunnels_wc[0], NULL);
 	else
 		ipip_tunnel_unlink(ipn, netdev_priv(dev));
 	dev_put(dev);
@@ -448,14 +448,14 @@ static netdev_tx_t ipip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (tos & 1)
 		tos = old_iph->tos;
 
-	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
 	if (!dst) {
 		/* NBMA tunnel */
 		if ((rt = skb_rtable(skb)) == NULL) {
 			dev->stats.tx_fifo_errors++;
 			goto tx_error;
 		}
-		dst = rt->rt_gateway;
+		if ((dst = rt->rt_gateway) == 0)
+			goto tx_error_icmp;
 	}
 
 	rt = ip_route_output_ports(dev_net(dev), &fl4, NULL,
@@ -531,6 +531,7 @@ static netdev_tx_t ipip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	skb->transport_header = skb->network_header;
 	skb_push(skb, sizeof(struct iphdr));
 	skb_reset_network_header(skb);
+	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
 	IPCB(skb)->flags &= ~(IPSKB_XFRM_TUNNEL_SIZE | IPSKB_XFRM_TRANSFORMED |
 			      IPSKB_REROUTED);
 	skb_dst_drop(skb);
@@ -892,7 +893,7 @@ static int __init ipip_init(void)
 	err = xfrm4_tunnel_register(&ipip_handler, AF_INET);
 	if (err < 0) {
 		unregister_pernet_device(&ipip_net_ops);
-		pr_info("%s: can't register tunnel\n", __func__);
+		printk(KERN_INFO "ipip init: can't register tunnel\n");
 	}
 	return err;
 }
@@ -900,7 +901,7 @@ static int __init ipip_init(void)
 static void __exit ipip_fini(void)
 {
 	if (xfrm4_tunnel_deregister(&ipip_handler, AF_INET))
-		pr_info("%s: can't deregister tunnel\n", __func__);
+		printk(KERN_INFO "ipip close: can't deregister tunnel\n");
 
 	unregister_pernet_device(&ipip_net_ops);
 }

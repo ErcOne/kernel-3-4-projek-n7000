@@ -217,7 +217,7 @@ static int __devinit hdmiphy_probe(struct i2c_client *client,
 {
 	static struct v4l2_subdev sd;
 
-	dev_info(&client->dev, "hdmiphy_probe start\n");
+	printk("hdmiphy_probe start\n");
 
 	v4l2_i2c_subdev_init(&sd, client, &hdmiphy_ops);
 	dev_info(&client->dev, "probe successful\n");
@@ -248,6 +248,7 @@ static struct i2c_driver hdmiphy_driver = {
 
 static int __init hdmiphy_init(void)
 {
+	printk("hdmiphy init start\n");
 	return i2c_add_driver(&hdmiphy_driver);
 }
 module_init(hdmiphy_init);

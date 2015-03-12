@@ -14,10 +14,10 @@
 
 #include <linux/videodev2.h>
 #include <linux/videodev2_exynos_media.h>
+#include <linux/videodev2_exynos_camera.h>
 #include <linux/mm.h>
 #include <linux/version.h>
 #include <linux/timer.h>
-#include <linux/export.h>
 
 #include <media/exynos_mc.h>
 #include <media/v4l2-ioctl.h>
@@ -26,8 +26,6 @@
 #elif defined(CONFIG_VIDEOBUF2_ION)
 #include <media/videobuf2-ion.h>
 #endif
-
-static int mxr_update(struct mxr_device *mdev);
 
 int __devinit mxr_acquire_video(struct mxr_device *mdev,
 	struct mxr_output_conf *output_conf, int output_count)
@@ -97,7 +95,7 @@ fail:
 	return ret;
 }
 
-void mxr_release_video(struct mxr_device *mdev)
+void __devexit mxr_release_video(struct mxr_device *mdev)
 {
 	int i;
 
@@ -425,25 +423,16 @@ static int mxr_s_ctrl(struct file *file, void *fh, struct v4l2_control *ctrl)
 	case V4L2_CID_TV_CHROMA_VALUE:
 		layer->chroma_val = (u32)v;
 		break;
+	case V4L2_CID_TV_HPD_STATUS:
+		v4l2_subdev_call(to_outsd(mdev), core, s_ctrl, ctrl);
+		break;
 	case V4L2_CID_TV_LAYER_PRIO:
 		layer->prio = (u8)v;
 		/* This can be turned on/off each layer while streaming */
 		if (layer->pipe.state == MXR_PIPELINE_STREAMING)
 			mxr_reg_set_layer_prio(mdev);
 		break;
-	case V4L2_CID_TV_SET_COLOR_RANGE:
-		mdev->color_range = v;
-		v4l2_subdev_call(to_outsd(mdev), core, s_ctrl, ctrl);
-		break;
-	case V4L2_CID_TV_UPDATE:
-		ret = mxr_update(mdev);
-		break;
-	case V4L2_CID_TV_ENABLE_HDMI_AUDIO:
-	case V4L2_CID_TV_SET_NUM_CHANNELS:
-	case V4L2_CID_TV_HPD_STATUS:
 	case V4L2_CID_TV_SET_DVI_MODE:
-	case V4L2_CID_TV_SET_ASPECT_RATIO:
-	case V4L2_CID_TV_HDCP_ENABLE:
 		v4l2_subdev_call(to_outsd(mdev), core, s_ctrl, ctrl);
 		break;
 	default:
@@ -475,7 +464,6 @@ static int mxr_g_ctrl(struct file *file, void *fh, struct v4l2_control *ctrl)
 
 	switch (ctrl->id) {
 	case V4L2_CID_TV_HPD_STATUS:
-	case V4L2_CID_TV_MAX_AUDIO_CHANNELS:
 		v4l2_subdev_call(to_outsd(mdev), core, g_ctrl, ctrl);
 		break;
 	default:
@@ -664,14 +652,12 @@ static int mxr_querybuf(struct file *file, void *priv, struct v4l2_buffer *p)
 static int mxr_qbuf(struct file *file, void *priv, struct v4l2_buffer *p)
 {
 	struct mxr_layer *layer = video_drvdata(file);
-
 	return vb2_qbuf(&layer->vb_queue, p);
 }
 
 static int mxr_dqbuf(struct file *file, void *priv, struct v4l2_buffer *p)
 {
 	struct mxr_layer *layer = video_drvdata(file);
-
 	return vb2_dqbuf(&layer->vb_queue, p, file->f_flags & O_NONBLOCK);
 }
 
@@ -862,9 +848,9 @@ static const struct v4l2_file_operations mxr_fops = {
 	.unlocked_ioctl = video_ioctl2,
 };
 
-static int queue_setup(struct vb2_queue *vq, const struct v4l2_format *pfmt,
-		unsigned int *nbuffers, unsigned int *nplanes,
-		unsigned int sizes[], void *alloc_ctxs[])
+static int queue_setup(struct vb2_queue *vq, unsigned int *nbuffers,
+	unsigned int *nplanes, unsigned long sizes[],
+	void *alloc_ctxs[])
 {
 	struct mxr_layer *layer = vb2_get_drv_priv(vq);
 	const struct mxr_format *fmt = layer->fmt;
@@ -884,7 +870,7 @@ static int queue_setup(struct vb2_queue *vq, const struct v4l2_format *pfmt,
 	for (i = 0; i < fmt->num_subframes; ++i) {
 		alloc_ctxs[i] = layer->mdev->alloc_ctx;
 		sizes[i] = PAGE_ALIGN(planes[i].sizeimage);
-		mxr_dbg(mdev, "size[%d] = %08x\n", i, sizes[i]);
+		mxr_dbg(mdev, "size[%d] = %08lx\n", i, sizes[i]);
 	}
 
 	if (*nbuffers == 0)
@@ -895,157 +881,28 @@ static int queue_setup(struct vb2_queue *vq, const struct v4l2_format *pfmt,
 	return 0;
 }
 
-static void layer_update(struct mxr_layer *layer,
-			 struct mxr_layer_update *update)
-{
-	layer->shadow_buf = layer->update_buf;
-	layer->update_buf = update->buffer;
-
-	if (layer->update_buf)
-		layer->ops.format_set(layer, update->fmt, &update->geo);
-
-	layer->ops.buffer_set(layer, layer->update_buf);
-}
-
-static void layer_buffer_done(struct mxr_layer *layer)
-{
-	struct mxr_pipeline *pipe = &layer->pipe;
-	unsigned long flags;
-
-	spin_lock_irqsave(&layer->enq_slock, flags);
-
-	if (layer->shadow_buf && layer->shadow_buf != layer->update_buf)
-		vb2_buffer_done(&layer->shadow_buf->vb, VB2_BUF_STATE_DONE);
-
-	if (layer->update_buf && pipe->state == MXR_PIPELINE_STREAMING_START)
-		pipe->state = MXR_PIPELINE_STREAMING;
-
-	if (!layer->update_buf && pipe->state == MXR_PIPELINE_STREAMING_FINISH)
-		pipe->state = MXR_PIPELINE_IDLE;
-
-	spin_unlock_irqrestore(&layer->enq_slock, flags);
-}
-
-static int buffer_fence_wait(struct mxr_device *mdev, struct mxr_buffer *buffer)
-{
-	struct sync_fence *fence;
-	int ret = 0;
-
-	fence = buffer->vb.acquire_fence;
-	if (!fence)
-		return 0;
-
-	ret = sync_fence_wait(fence, 1000);
-	if (ret == -ETIME) {
-		mxr_warn(mdev, "sync_fence_wait timeout");
-		ret = sync_fence_wait(fence, 10 * MSEC_PER_SEC);
-	}
-	if (ret)
-		mxr_warn(mdev, "sync_fence_wait error");
-
-	buffer->vb.acquire_fence = NULL;
-	sync_fence_put(fence);
-	return ret;
-}
-
-static void mxr_update_work(struct work_struct *work)
-{
-	struct mxr_update *update = container_of(work, struct mxr_update, work);
-	struct mxr_device *mdev = update->mdev;
-	struct mxr_layer **layers = mdev->sub_mxr[MXR_SUB_MIXER0].layer;
-	struct mxr_buffer *buffer;
-	int i;
-
-	mutex_lock(&mdev->s_mutex);
-
-	for (i = 0; i < MXR_MAX_LAYERS; i++) {
-		buffer = update->layers[i].buffer;
-		if (buffer)
-			buffer_fence_wait(mdev, buffer);
-	}
-
-	if (!mdev->n_streamer)
-		goto out;
-
-	mxr_vsync_disable_update(mdev);
-
-	for (i = 0; i < MXR_MAX_LAYERS; i++) {
-		if (update->layers[i].update)
-			layer_update(layers[i], &update->layers[i]);
-	}
-
-	mxr_vsync_enable_update(mdev);
-
-	mxr_reg_wait4update(mdev);
-
-	for (i = 0; i < ARRAY_SIZE(update->layers); i++)
-		if (update->layers[i].update)
-			layer_buffer_done(layers[i]);
-
-out:
-	mutex_unlock(&mdev->s_mutex);
-	kfree(update);
-}
-
-static void mxr_fill_update(struct mxr_layer *layer,
-			    struct mxr_layer_update *update)
-{
-	struct mxr_pipeline *pipe = &layer->pipe;
-	unsigned long flags;
-
-	spin_lock_irqsave(&layer->enq_slock, flags);
-
-	if ((pipe->state == MXR_PIPELINE_STREAMING && layer->prio == 0)
-			|| pipe->state == MXR_PIPELINE_STREAMING_FINISH) {
-		update->update = true;
-		update->buffer = NULL;
-	} else if (!list_empty(&layer->fence_wait_list)) {
-		update->update = true;
-		update->buffer = list_first_entry(&layer->fence_wait_list,
-					  struct mxr_buffer, wait);
-		list_del(&update->buffer->wait);
-	} else {
-		update->update = false;
-	}
-
-	spin_unlock_irqrestore(&layer->enq_slock, flags);
-
-	if (update->buffer) {
-		update->fmt = layer->fmt;
-		memcpy(&update->geo, &layer->geo, sizeof(layer->geo));
-	}
-}
-
-static int mxr_update(struct mxr_device *mdev)
-{
-	struct mxr_layer **layers = mdev->sub_mxr[MXR_SUB_MIXER0].layer;
-	struct mxr_update *update;
-	int i;
-
-	update = kzalloc(sizeof(struct mxr_update), GFP_KERNEL);
-	if (!update)
-		return -ENOMEM;
-
-	/* start from 1, only the graphic layers are supported */
-	for (i = 1; i < ARRAY_SIZE(update->layers); i++)
-		mxr_fill_update(layers[i], &update->layers[i]);
-
-	update->mdev = mdev;
-	INIT_WORK(&update->work, mxr_update_work);
-
-	queue_work(mdev->update_wq, &update->work);
-	return 0;
-}
-
 static void buf_queue(struct vb2_buffer *vb)
 {
 	struct mxr_buffer *buffer = container_of(vb, struct mxr_buffer, vb);
 	struct mxr_layer *layer = vb2_get_drv_priv(vb->vb2_queue);
+	struct mxr_pipeline *pipe = &layer->pipe;
 	unsigned long flags;
+	int must_start = 0;
 
 	spin_lock_irqsave(&layer->enq_slock, flags);
-	list_add_tail(&buffer->wait, &layer->fence_wait_list);
+	if (pipe->state == MXR_PIPELINE_STREAMING_START) {
+		pipe->state = MXR_PIPELINE_STREAMING;
+		must_start = 1;
+	}
+	list_add_tail(&buffer->list, &layer->enq_list);
 	spin_unlock_irqrestore(&layer->enq_slock, flags);
+	if (must_start) {
+		layer->ops.stream_set(layer, MXR_ENABLE);
+		/* store starting entity ptr on the tv graphic pipeline */
+		pipe->layer = layer;
+		/* start streaming all entities on the tv graphic pipeline */
+		tv_graph_pipeline_stream(pipe, 1);
+	}
 }
 
 static void wait_lock(struct vb2_queue *vq)
@@ -1106,7 +963,7 @@ static int buf_prepare(struct vb2_buffer *vb)
 	return 0;
 }
 
-static int start_streaming(struct vb2_queue *vq, unsigned int count)
+static int start_streaming(struct vb2_queue *vq)
 {
 	struct mxr_layer *layer = vb2_get_drv_priv(vq);
 	struct mxr_device *mdev = layer->mdev;
@@ -1116,15 +973,12 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 
 	mxr_dbg(mdev, "%s\n", __func__);
 
-	if (count == 0) {
-		mxr_dbg(mdev, "no output buffers queued\n");
-		return -EINVAL;
-	}
-
 	/* enable mixer clock */
 	ret = mxr_power_get(mdev);
-	if (ret)
+	if (ret) {
 		mxr_err(mdev, "power on failed\n");
+		return -ENODEV;
+	}
 
 	/* block any changes in output configuration */
 	mxr_output_get(mdev);
@@ -1133,21 +987,36 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 	mxr_layer_geo_fix(layer);
 	mxr_geometry_dump(mdev, &layer->geo);
 
+	layer->ops.format_set(layer);
+	/* enabling layer in hardware */
 	spin_lock_irqsave(&layer->enq_slock, flags);
-	if (list_empty(&layer->enq_list))
-		pipe->state = MXR_PIPELINE_STREAMING_START;
-	else
-		pipe->state = MXR_PIPELINE_STREAMING;
+	pipe->state = MXR_PIPELINE_STREAMING_START;
 	spin_unlock_irqrestore(&layer->enq_slock, flags);
 
-	/* enabling layer in hardware */
-	layer->ops.stream_set(layer, MXR_ENABLE);
-	/* store starting entity ptr on the tv graphic pipeline */
-	pipe->layer = layer;
-	/* start streaming all entities on the tv graphic pipeline */
-	tv_graph_pipeline_stream(pipe, 1);
-
 	return 0;
+}
+
+static void mxr_watchdog(unsigned long arg)
+{
+	struct mxr_layer *layer = (struct mxr_layer *) arg;
+	struct mxr_device *mdev = layer->mdev;
+	unsigned long flags;
+
+	mxr_err(mdev, "watchdog fired for layer %s\n", layer->vfd.name);
+
+	spin_lock_irqsave(&layer->enq_slock, flags);
+
+	if (layer->update_buf == layer->shadow_buf)
+		layer->update_buf = NULL;
+	if (layer->update_buf) {
+		vb2_buffer_done(&layer->update_buf->vb, VB2_BUF_STATE_ERROR);
+		layer->update_buf = NULL;
+	}
+	if (layer->shadow_buf) {
+		vb2_buffer_done(&layer->shadow_buf->vb, VB2_BUF_STATE_ERROR);
+		layer->shadow_buf = NULL;
+	}
+	spin_unlock_irqrestore(&layer->enq_slock, flags);
 }
 
 static int stop_streaming(struct vb2_queue *vq)
@@ -1155,27 +1024,13 @@ static int stop_streaming(struct vb2_queue *vq)
 	struct mxr_layer *layer = vb2_get_drv_priv(vq);
 	struct mxr_device *mdev = layer->mdev;
 	unsigned long flags;
+	struct timer_list watchdog;
 	struct mxr_buffer *buf, *buf_tmp;
 	struct mxr_pipeline *pipe = &layer->pipe;
 
 	mxr_dbg(mdev, "%s\n", __func__);
 
 	spin_lock_irqsave(&layer->enq_slock, flags);
-
-	list_for_each_entry_safe(buf, buf_tmp, &layer->fence_wait_list, wait) {
-		list_del(&buf->wait);
-
-		if (buf->vb.acquire_fence) {
-			spin_unlock_irqrestore(&layer->enq_slock, flags);
-
-			sync_fence_put(buf->vb.acquire_fence);
-			buf->vb.acquire_fence = NULL;
-
-			spin_lock_irqsave(&layer->enq_slock, flags);
-		}
-
-		vb2_buffer_done(&buf->vb, VB2_BUF_STATE_ERROR);
-	}
 
 	/* reset list */
 	pipe->state = MXR_PIPELINE_STREAMING_FINISH;
@@ -1188,11 +1043,23 @@ static int stop_streaming(struct vb2_queue *vq)
 
 	spin_unlock_irqrestore(&layer->enq_slock, flags);
 
-	/* to complete last buffer */
-	mxr_update(mdev);
+	/* give 1 seconds to complete to complete last buffers */
+	setup_timer_on_stack(&watchdog, mxr_watchdog,
+		(unsigned long)layer);
+	mod_timer(&watchdog, jiffies + msecs_to_jiffies(1000));
 
 	/* wait until all buffers are goes to done state */
 	vb2_wait_for_all_buffers(vq);
+
+	/* stop timer if all synchronization is done */
+	del_timer_sync(&watchdog);
+	destroy_timer_on_stack(&watchdog);
+
+	/* stopping hardware */
+	spin_lock_irqsave(&layer->enq_slock, flags);
+
+	pipe->state = MXR_PIPELINE_IDLE;
+	spin_unlock_irqrestore(&layer->enq_slock, flags);
 
 	/* disabling layer in hardware */
 	layer->ops.stream_set(layer, MXR_DISABLE);
@@ -1235,8 +1102,7 @@ int mxr_base_layer_register(struct mxr_layer *layer)
 	}
 
 	layer->vfd.v4l2_dev = &md->v4l2_dev;
-	ret = video_register_device(&layer->vfd, VFL_TYPE_GRABBER,
-			layer->minor);
+	ret = video_register_device(&layer->vfd, VFL_TYPE_GRABBER, layer->minor);
 	if (ret)
 		mxr_err(mdev, "failed to register video device\n");
 	else
@@ -1258,7 +1124,6 @@ void mxr_layer_release(struct mxr_layer *layer)
 
 void mxr_base_layer_release(struct mxr_layer *layer)
 {
-	kfree(layer->vb_queue.name);
 	kfree(layer);
 }
 
@@ -1286,9 +1151,7 @@ struct mxr_layer *mxr_base_layer_create(struct mxr_device *mdev,
 
 	spin_lock_init(&layer->enq_slock);
 	INIT_LIST_HEAD(&layer->enq_list);
-	INIT_LIST_HEAD(&layer->fence_wait_list);
 	mutex_init(&layer->mutex);
-
 
 	layer->vfd = (struct video_device) {
 		.minor = -1,
@@ -1315,9 +1178,8 @@ struct mxr_layer *mxr_base_layer_create(struct mxr_device *mdev,
 	layer->vfd.lock = &layer->mutex;
 
 	layer->vb_queue = (struct vb2_queue) {
-		.name = kstrdup(name, GFP_KERNEL),
 		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-		.io_modes = VB2_MMAP | VB2_DMABUF,
+		.io_modes = VB2_MMAP | VB2_USERPTR,
 		.drv_priv = layer,
 		.buf_struct_size = sizeof(struct mxr_buffer),
 		.ops = &mxr_video_qops,

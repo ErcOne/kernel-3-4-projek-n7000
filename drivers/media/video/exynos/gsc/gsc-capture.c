@@ -29,28 +29,27 @@
 #include <linux/i2c.h>
 #include <media/v4l2-ioctl.h>
 #include <media/exynos_gscaler.h>
-#include <plat/bts.h>
 
 #include "gsc-core.h"
 
-static int gsc_capture_queue_setup(struct vb2_queue *vq,
-			const struct v4l2_format *fmt, unsigned int *num_buffers,
-			unsigned int *num_planes, unsigned int sizes[],
-			void *allocators[])
+static int gsc_capture_queue_setup(struct vb2_queue *vq, unsigned int *num_buffers,
+		       unsigned int *num_planes, unsigned long sizes[],
+		       void *allocators[])
 {
 	struct gsc_ctx *ctx = vq->drv_priv;
-	struct gsc_fmt *ffmt = ctx->d_frame.fmt;
+	struct gsc_fmt *fmt = ctx->d_frame.fmt;
 	int i;
 
-	if (!ffmt)
+	if (!fmt)
 		return -EINVAL;
 
-	*num_planes = ffmt->num_planes;
+	*num_planes = fmt->num_planes;
 
-	for (i = 0; i < ffmt->num_planes; i++) {
+	for (i = 0; i < fmt->num_planes; i++) {
 		sizes[i] = get_plane_size(&ctx->d_frame, i);
 		allocators[i] = ctx->gsc_dev->alloc_ctx;
 	}
+	vb2_queue_init(vq);
 
 	return 0;
 }
@@ -164,7 +163,7 @@ static void gsc_capture_buf_queue(struct vb2_buffer *vb)
 	if (ret)
 		gsc_err("Failed to prepare output addr");
 
-		gsc_hw_set_output_buf_masking(gsc, vb->v4l2_buf.index, 0);
+	gsc_hw_set_output_buf_masking(gsc, vb->v4l2_buf.index, 0);
 
 	min_bufs = cap->reqbufs_cnt > 1 ? 2 : 1;
 
@@ -245,7 +244,7 @@ static int gsc_capture_subdev_s_stream(struct v4l2_subdev *sd, int enable)
 		gsc_hw_set_overflow_irq_mask(gsc, false);
 		gsc_hw_set_one_frm_mode(gsc, false);
 		gsc_hw_set_gsc_irq_enable(gsc, true);
-		
+
 		if (gsc->pipeline.disp)
 			gsc_hw_set_sysreg_writeback(ctx);
 		else
@@ -258,15 +257,15 @@ static int gsc_capture_subdev_s_stream(struct v4l2_subdev *sd, int enable)
 		gsc_hw_set_out_size(ctx);
 		gsc_hw_set_out_image_format(ctx);
 		gsc_hw_set_global_alpha(ctx);
-		
+
 		gsc_capture_scaler_info(ctx);
 		gsc_hw_set_prescaler(ctx);
 		gsc_hw_set_mainscaler(ctx);
 		gsc_hw_set_h_coef(ctx);
 		gsc_hw_set_v_coef(ctx);
-		
+
 		set_bit(ST_CAPT_PEND, &gsc->state);
-		
+
 		gsc_hw_enable_control(gsc, true);
 		set_bit(ST_CAPT_STREAM, &gsc->state);
 	} else {
@@ -276,13 +275,17 @@ static int gsc_capture_subdev_s_stream(struct v4l2_subdev *sd, int enable)
 	return 0;
 }
 
-static int gsc_capture_start_streaming(struct vb2_queue *q, unsigned int count)
+static int gsc_capture_start_streaming(struct vb2_queue *q)
 {
 	struct gsc_ctx *ctx = q->drv_priv;
 	struct gsc_dev *gsc = ctx->gsc_dev;
 	struct gsc_capture_device *cap = &gsc->cap;
 	struct exynos_md *mdev = gsc->mdev[MDEV_CAPTURE];
 	int min_bufs;
+
+	gsc_hw_set_sw_reset(gsc);
+	gsc_wait_reset(gsc);
+	gsc_hw_set_output_buf_mask_all(gsc);
 
 	min_bufs = cap->reqbufs_cnt > 1 ? 2 : 1;
 	if ((gsc_hw_get_nr_unmask_bits(gsc) >= min_bufs) &&
@@ -317,12 +320,12 @@ static int gsc_capture_state_cleanup(struct gsc_dev *gsc)
 	if (streaming) {
 		if (!mdev->is_flite_on)
 			return gsc_cap_pipeline_s_stream(gsc, 0);
-	else
+		else
 			return v4l2_subdev_call(gsc->cap.sd_cap, video,
 							s_stream, 0);
 	} else {
 		return 0;
-}
+	}
 }
 
 static int gsc_cap_stop_capture(struct gsc_dev *gsc)
@@ -341,7 +344,6 @@ static int gsc_cap_stop_capture(struct gsc_dev *gsc)
 		return ret;
 	}
 
-	bts_change_bus_traffic(&gsc->pdev->dev, BTS_DECREASE_BW);
 	return gsc_capture_state_cleanup(gsc);
 }
 
@@ -673,9 +675,9 @@ static int __gsc_cap_pipeline_initialize(struct gsc_dev *gsc,
 
 	if (prep) {
 		gsc_cap_pipeline_prepare(gsc, me);
-	if ((!gsc->pipeline.sensor || !gsc->pipeline.flite) &&
-			!gsc->pipeline.disp)
-		return -EINVAL;
+		if ((!gsc->pipeline.sensor || !gsc->pipeline.flite) &&
+				!gsc->pipeline.disp)
+			return -EINVAL;
 	}
 
 	gsc_set_cam_clock(gsc, true);
@@ -891,23 +893,15 @@ static int gsc_capture_streamon(struct file *file, void *priv,
 	if (gsc_cap_active(gsc))
 		return -EBUSY;
 
-	if (p->disp) {
+	if (p->disp)
 		media_entity_pipeline_start(&p->disp->entity, p->pipe);
-	} else if (p->sensor) {
+	else if (p->sensor)
 		media_entity_pipeline_start(&p->sensor->entity, p->pipe);
-	} else {
-		gsc_err("Error pipeline");
-		return -EPIPE;
-	}
 
 	ret = gsc_cap_link_validate(gsc);
 	if (ret)
 		return ret;
 
-	bts_change_bus_traffic(&gsc->pdev->dev, BTS_INCREASE_BW);
-	gsc_hw_set_sw_reset(gsc);
-	gsc_wait_reset(gsc);
-	gsc_hw_set_output_buf_mask_all(gsc);
 	return vb2_streamon(&gsc->cap.vbq, type);
 }
 
@@ -1064,7 +1058,7 @@ static void gsc_cap_check_limit_size(struct gsc_dev *gsc, unsigned int pad,
 {
 	struct gsc_variant *variant = gsc->variant;
 	struct gsc_ctx *ctx = gsc->cap.ctx;
-	u32 min_w = 0, min_h = 0, max_w = 0, max_h = 0;
+	u32 min_w, min_h, max_w, max_h;
 
 	switch (pad) {
 	case GSC_PAD_SINK:
@@ -1089,6 +1083,9 @@ static void gsc_cap_check_limit_size(struct gsc_dev *gsc, unsigned int pad,
 		max_w = variant->pix_max->target_rot_dis_w;
 		max_h = variant->pix_max->target_rot_dis_h;
 		break;
+	default:
+		gsc_err("unsupported pad");
+		return;
 	}
 
 	fmt->width = clamp_t(u32, fmt->width, min_w, max_w);
@@ -1554,7 +1551,7 @@ int gsc_register_capture_device(struct gsc_dev *gsc)
 	q = &gsc->cap.vbq;
 	memset(q, 0, sizeof(*q));
 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	q->io_modes = VB2_MMAP | VB2_DMABUF;
+	q->io_modes = VB2_MMAP | VB2_USERPTR;
 	q->drv_priv = gsc->cap.ctx;
 	q->ops = &gsc_capture_qops;
 	q->mem_ops = gsc->vb2->ops;

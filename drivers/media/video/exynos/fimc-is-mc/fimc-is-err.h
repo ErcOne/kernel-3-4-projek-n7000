@@ -192,14 +192,14 @@ enum error {
 	ERROR_FD_CONFIG_ORIENTATION_VALUE_INVALID	= 413,
 	/* PARAM_FdResultStr can be only applied
 	 * in ready-state or stream off */
-	ERROR_FD_RESULT					= 414,
+	ERROR_FD_RESULT				= 414,
 	/* PARAM_FdModeStr can be only applied
 	 * in ready-state or stream off */
 	ERROR_FD_MODE					= 415,
 
 	/*SCALER ERR(500~599)*/
-	ERROR_SCALER_NO				= ERROR_COMMON_NO,
-	ERROR_SCALER_DMA_OUTSEL			= 501,
+	ERROR_SCALER_NO			= ERROR_COMMON_NO,
+	ERROR_SCALER_DMA_OUTSEL		= 501,
 	ERROR_SCALER_H_RATIO			= 502,
 	ERROR_SCALER_V_RATIO			= 503,
 	ERROR_SCALER_FRAME_BUFFER_SEQ		= 504,

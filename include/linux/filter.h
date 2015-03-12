@@ -9,8 +9,7 @@
 #include <linux/types.h>
 
 #ifdef __KERNEL__
-#include <linux/atomic.h>
-#include <linux/compat.h>
+#include <asm/atomic.h>
 #endif
 
 /*
@@ -133,16 +132,6 @@ struct sock_fprog {	/* Required for SO_ATTACH_FILTER. */
 
 #ifdef __KERNEL__
 
-#ifdef CONFIG_COMPAT
-/*
- * A struct sock_filter is architecture independent.
- */
-struct compat_sock_fprog {
-	u16		len;
-	compat_uptr_t	filter;		/* struct sock_filter * */
-};
-#endif
-
 struct sk_buff;
 struct sock;
 
@@ -166,7 +155,7 @@ extern unsigned int sk_run_filter(const struct sk_buff *skb,
 				  const struct sock_filter *filter);
 extern int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk);
 extern int sk_detach_filter(struct sock *sk);
-extern int sk_chk_filter(struct sock_filter *filter, unsigned int flen);
+extern int sk_chk_filter(struct sock_filter *filter, int flen);
 
 #ifdef CONFIG_BPF_JIT
 extern void bpf_jit_compile(struct sk_filter *fp);
@@ -239,7 +228,6 @@ enum {
 	BPF_S_ANC_HATYPE,
 	BPF_S_ANC_RXHASH,
 	BPF_S_ANC_CPU,
-	BPF_S_ANC_SECCOMP_LD_W,
 };
 
 #endif /* __KERNEL__ */

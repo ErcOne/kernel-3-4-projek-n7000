@@ -12,13 +12,12 @@
 #ifndef FIMC_IS_CORE_H
 #define FIMC_IS_CORE_H
 
-/*#define DEBUG			1*/
-/*#define FIMC_IS_A5_DEBUG_ON	1*/
+/*#define DEBUG 1*/
 #define FRAME_RATE_ENABLE	1
-/*#define ODC_ENABLE		1*/
-/*#define TDNR_ENABLE		1*/
-/*#define DZOOM_ENABLE		1*/
-/*#define DIS_ENABLE		1*/
+/*#define ODC_ENABLE	1*/
+/*#define TDNR_ENABLE	1*/
+/*#define DZOOM_ENABLE	1*/
+/*#define DIS_ENABLE	1*/
 
 #include <linux/sched.h>
 #include <linux/spinlock.h>
@@ -50,7 +49,8 @@
 #define FIMC_IS_VIDEO_3DNR_NAME			"exynos5-fimc-is-3dnr"
 #define FIMC_IS_VIDEO_SCALERP_NAME		"exynos5-fimc-is-scalerp"
 
-#define FIMC_IS_A5_DEBUG_LEVEL			3
+#define FIMC_IS_DEBUG_LEVEL			(3)
+/*#define FIMC_IS_A5_DEBUG_ON			(1)*/
 
 #define MAX_I2H_ARG				(4)
 
@@ -353,8 +353,8 @@ struct fimc_is_video_dev {
 	struct video_device		vd;
 	struct media_pad		pads;
 	struct vb2_queue		vbq;
-	struct fimc_is_dev		*dev;
-	struct fimc_is_frame		frame;
+	struct fimc_is_dev			*dev;
+	struct fimc_is_frame	frame;
 	unsigned int			num_buf;
 	unsigned int			buf_ref_cnt;
 	unsigned int			buf_mask;
@@ -475,7 +475,7 @@ struct fimc_is_dev {
 	unsigned long				p_region_index1;
 	unsigned long				p_region_index2;
 	struct is_region			*is_p_region;
-	struct is_share_region			*is_shared_region;
+	struct is_share_region		*is_shared_region;
 	u32					scenario_id;
 	u32					frame_count;
 	u32					sensor_num;

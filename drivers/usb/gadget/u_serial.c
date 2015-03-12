@@ -25,7 +25,6 @@
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/slab.h>
-#include <linux/export.h>
 
 #include "u_serial.h"
 
@@ -123,7 +122,7 @@ struct gs_port {
 };
 
 /* increase N_PORTS if you need more */
-#define N_PORTS		4
+#define N_PORTS		8
 static struct portmaster {
 	struct mutex	lock;			/* protect open/close */
 	struct gs_port	*port;
@@ -381,7 +380,8 @@ __acquires(&port->port_lock)
 
 		req->length = len;
 		list_del(&req->list);
-		req->zero = (gs_buf_data_avail(&port->port_write_buf) == 0);
+		req->zero = (gs_buf_data_avail(&port->port_write_buf) == 0)
+			&&  (req->length % in->maxpacket == 0);
 
 		pr_vdebug(PREFIX "%d: tx len=%d, 0x%02x 0x%02x 0x%02x ...\n",
 				port->port_num, len, *((u8 *)req->buf),
@@ -553,8 +553,9 @@ recycle:
 	/* Push from tty to ldisc; without low_latency set this is handled by
 	 * a workqueue, so we won't get callbacks and can hold port_lock
 	 */
-	if (tty && do_push)
+	if (tty && do_push) {
 		tty_flip_buffer_push(tty);
+	}
 
 
 	/* We want our data queue to become empty ASAP, keeping data
@@ -724,6 +725,9 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 	int		port_num = tty->index;
 	struct gs_port	*port;
 	int		status;
+
+	if (port_num < 0 || port_num >= n_ports)
+		return -ENXIO;
 
 	do {
 		mutex_lock(&ports[port_num].lock);
@@ -1084,6 +1088,7 @@ int gserial_setup(struct usb_gadget *g, unsigned count)
 	if (!gs_tty_driver)
 		return -ENOMEM;
 
+	gs_tty_driver->owner = THIS_MODULE;
 	gs_tty_driver->driver_name = "g_serial";
 	gs_tty_driver->name = PREFIX;
 	/* uses dynamically assigned dev_t values */
@@ -1243,12 +1248,12 @@ int gserial_connect(struct gserial *gser, u8 port_num)
 	port = ports[port_num].port;
 
 	/* activate the endpoints */
-	status = usb_ep_enable(gser->in);
+	status = usb_ep_enable(gser->in, gser->in_desc);
 	if (status < 0)
 		return status;
 	gser->in->driver_data = port;
 
-	status = usb_ep_enable(gser->out);
+	status = usb_ep_enable(gser->out, gser->out_desc);
 	if (status < 0)
 		goto fail_out;
 	gser->out->driver_data = port;

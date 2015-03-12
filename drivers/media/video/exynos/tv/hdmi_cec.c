@@ -18,16 +18,9 @@
 #include <linux/sched.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
-#include <linux/export.h>
-#include <linux/module.h>
-#include <plat/devs.h>
-#include <plat/tv-core.h>
+#include <plat/tvout.h>
 
 #include "cec.h"
-
-MODULE_AUTHOR("SangPil Moon");
-MODULE_DESCRIPTION("S5P CEC driver");
-MODULE_LICENSE("GPL");
 
 #define CEC_IOC_MAGIC        'c'
 #define CEC_IOC_SETLADDR     _IOW(CEC_IOC_MAGIC, 0, unsigned int)
@@ -435,3 +428,6 @@ static void __exit s5p_cec_exit(void)
 module_init(s5p_cec_init);
 module_exit(s5p_cec_exit);
 
+MODULE_AUTHOR("SangPil Moon");
+MODULE_DESCRIPTION("S5P CEC driver");
+MODULE_LICENSE("GPL");

@@ -19,7 +19,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/sched.h>
-#include <linux/magic.h>
 #include <linux/binfmts.h>
 #include <linux/slab.h>
 #include <linux/ctype.h>
@@ -117,6 +116,10 @@ static int load_misc_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 	if (!enabled)
 		goto _ret;
 
+	retval = -ENOEXEC;
+	if (bprm->recursion_depth > BINPRM_MAX_RECURSION)
+		goto _ret;
+
 	/* to keep locking time low, we copy the interpreter string */
 	read_lock(&entries_lock);
 	fmt = check_file(bprm);
@@ -146,7 +149,8 @@ static int load_misc_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 
 		/* if the binary is not readable than enforce mm->dumpable=0
 		   regardless of the interpreter's permissions */
-		would_dump(bprm, bprm->file);
+		if (file_permission(bprm->file, MAY_READ))
+			bprm->interp_flags |= BINPRM_FLAGS_ENFORCE_NONDUMP;
 
 		allow_write_access(bprm->file);
 		bprm->file = NULL;
@@ -195,6 +199,8 @@ static int load_misc_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 
 	if (retval < 0)
 		goto _error;
+
+	bprm->recursion_depth++;
 
 	retval = search_binary_handler (bprm, regs);
 	if (retval < 0)
@@ -519,7 +525,7 @@ static void kill_node(Node *e)
 	write_unlock(&entries_lock);
 
 	if (dentry) {
-		drop_nlink(dentry->d_inode);
+		dentry->d_inode->i_nlink--;
 		d_drop(dentry);
 		dput(dentry);
 		simple_release_fs(&bm_mnt, &entry_count);
@@ -558,7 +564,7 @@ static ssize_t bm_entry_write(struct file *file, const char __user *buffer,
 			break;
 		case 2: set_bit(Enabled, &e->flags);
 			break;
-		case 3: root = dget(file->f_path.dentry->d_sb->s_root);
+		case 3: root = dget(file->f_path.mnt->mnt_sb->s_root);
 			mutex_lock(&root->d_inode->i_mutex);
 
 			kill_node(e);
@@ -585,7 +591,7 @@ static ssize_t bm_register_write(struct file *file, const char __user *buffer,
 	Node *e;
 	struct inode *inode;
 	struct dentry *root, *dentry;
-	struct super_block *sb = file->f_path.dentry->d_sb;
+	struct super_block *sb = file->f_path.mnt->mnt_sb;
 	int err = 0;
 
 	e = create_entry(buffer, count);
@@ -664,7 +670,7 @@ static ssize_t bm_status_write(struct file * file, const char __user * buffer,
 	switch (res) {
 		case 1: enabled = 0; break;
 		case 2: enabled = 1; break;
-		case 3: root = dget(file->f_path.dentry->d_sb->s_root);
+		case 3: root = dget(file->f_path.mnt->mnt_sb->s_root);
 			mutex_lock(&root->d_inode->i_mutex);
 
 			while (!list_empty(&entries))
@@ -697,7 +703,7 @@ static int bm_fill_super(struct super_block * sb, void * data, int silent)
 		[3] = {"register", &bm_register_operations, S_IWUSR},
 		/* last one */ {""}
 	};
-	int err = simple_fill_super(sb, BINFMTFS_MAGIC, bm_files);
+	int err = simple_fill_super(sb, 0x42494e4d, bm_files);
 	if (!err)
 		sb->s_op = &s_ops;
 	return err;
@@ -724,8 +730,11 @@ static struct file_system_type bm_fs_type = {
 static int __init init_misc_binfmt(void)
 {
 	int err = register_filesystem(&bm_fs_type);
-	if (!err)
-		insert_binfmt(&misc_format);
+	if (!err) {
+		err = insert_binfmt(&misc_format);
+		if (err)
+			unregister_filesystem(&bm_fs_type);
+	}
 	return err;
 }
 

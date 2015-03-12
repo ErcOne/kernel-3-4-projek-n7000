@@ -172,36 +172,6 @@
 #define LANE0_MAP_LOGIC_LANE_2			(0x2 << 0)
 #define LANE0_MAP_LOGIC_LANE_3			(0x3 << 0)
 
-/* S5P_DP_ANALOG_CTL_1 */
-#define TX_TERMINAL_CTRL_50_OHM			(0x1 << 4)
-
-/* S5P_DP_ANALOG_CTL_2 */
-#define SEL_24M					(0x1 << 3)
-#define TX_DVDD_BIT_1_0625V			(0x4 << 0)
-
-/* S5P_DP_ANALOG_CTL_3 */
-#define DRIVE_DVDD_BIT_1_0625V			(0x4 << 5)
-#define VCO_BIT_600_MICRO			(0x5 << 0)
-
-/* S5P_DP_PLL_FILTER_CTL_1 */
-#define PD_RING_OSC				(0x1 << 6)
-#define AUX_TERMINAL_CTRL_37_5_OHM		(0x0 << 4)
-#define AUX_TERMINAL_CTRL_45_OHM		(0x1 << 4)
-#define AUX_TERMINAL_CTRL_50_OHM		(0x2 << 4)
-#define AUX_TERMINAL_CTRL_65_OHM		(0x3 << 4)
-#define TX_CUR1_2X				(0x1 << 2)
-#define TX_CUR_16_MA				(0x3 << 0)
-
-/* S5P_DP_TX_AMP_TUNING_CTL */
-#define CH3_AMP_SHIFT				(24)
-#define CH3_AMP_400_MV				(0x0 << 24)
-#define CH2_AMP_SHIFT				(16)
-#define CH2_AMP_400_MV				(0x0 << 16)
-#define CH1_AMP_SHIFT				(8)
-#define CH1_AMP_400_MV				(0x0 << 8)
-#define CH0_AMP_SHIFT				(0)
-#define CH0_AMP_400_MV				(0x0 << 0)
-
 /* S5P_DP_AUX_HW_RETRY_CTL */
 #define AUX_BIT_PERIOD_EXPECTED_DELAY(x)	(((x) & 0x7) << 8)
 #define AUX_HW_RETRY_INTERVAL_MASK		(0x3 << 3)
@@ -292,7 +262,6 @@
 #define SW_TRAINING_PATTERN_SET_NORMAL		(0x0 << 0)
 
 /* S5P_DP_LN0_LINK_TRAINING_CTL */
-#define PRE_EMPHASIS_SET_MASK			(0x3 << 3)
 #define PRE_EMPHASIS_SET_SHIFT			(3)
 
 /* S5P_DP_DEBUG_CTL */

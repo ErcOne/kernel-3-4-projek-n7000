@@ -199,14 +199,6 @@
 #define MI_DISPLAY_FLIP		MI_INSTR(0x14, 2)
 #define MI_DISPLAY_FLIP_I915	MI_INSTR(0x14, 1)
 #define   MI_DISPLAY_FLIP_PLANE(n) ((n) << 20)
-/* IVB has funny definitions for which plane to flip. */
-#define   MI_DISPLAY_FLIP_IVB_PLANE_A  (0 << 19)
-#define   MI_DISPLAY_FLIP_IVB_PLANE_B  (1 << 19)
-#define   MI_DISPLAY_FLIP_IVB_SPRITE_A (2 << 19)
-#define   MI_DISPLAY_FLIP_IVB_SPRITE_B (3 << 19)
-#define   MI_DISPLAY_FLIP_IVB_PLANE_C  (4 << 19)
-#define   MI_DISPLAY_FLIP_IVB_SPRITE_C (5 << 19)
-
 #define MI_SET_CONTEXT		MI_INSTR(0x18, 0)
 #define   MI_MM_SPACE_GTT		(1<<8)
 #define   MI_MM_SPACE_PHYSICAL		(0<<8)
@@ -448,9 +440,6 @@
 # define VS_TIMER_DISPATCH				(1 << 6)
 # define MI_FLUSH_ENABLE				(1 << 12)
 
-#define GEN6_GT_MODE	0x20d0
-#define   GEN6_GT_MODE_HI	(1 << 9)
-
 #define GFX_MODE	0x02520
 #define GFX_MODE_GEN7	0x0229c
 #define RING_MODE_GEN7(ring)	((ring)->mmio_base+0x29c)
@@ -502,8 +491,6 @@
 					will not assert AGPBUSY# and will only
 					be delivered when out of C3. */
 #define   INSTPM_FORCE_ORDERING				(1<<7) /* GEN6+ */
-#define   INSTPM_TLB_INVALIDATE	(1<<9)
-#define   INSTPM_SYNC_FLUSH	(1<<5)
 #define ACTHD	        0x020c8
 #define FW_BLC		0x020d8
 #define FW_BLC2		0x020dc
@@ -584,7 +571,6 @@
 #define   CM0_MASK_SHIFT          16
 #define   CM0_IZ_OPT_DISABLE      (1<<6)
 #define   CM0_ZR_OPT_DISABLE      (1<<5)
-#define	  CM0_STC_EVICT_DISABLE_LRA_SNB	(1<<5)
 #define   CM0_DEPTH_EVICT_DISABLE (1<<4)
 #define   CM0_COLOR_EVICT_DISABLE (1<<3)
 #define   CM0_DEPTH_WRITE_DISABLE (1<<1)
@@ -1499,20 +1485,14 @@
 #define   DPC_HOTPLUG_INT_STATUS		(1 << 28)
 #define   HDMID_HOTPLUG_INT_STATUS		(1 << 27)
 #define   DPD_HOTPLUG_INT_STATUS		(1 << 27)
-/* CRT/TV common between gen3+ */
 #define   CRT_HOTPLUG_INT_STATUS		(1 << 11)
 #define   TV_HOTPLUG_INT_STATUS			(1 << 10)
 #define   CRT_HOTPLUG_MONITOR_MASK		(3 << 8)
 #define   CRT_HOTPLUG_MONITOR_COLOR		(3 << 8)
 #define   CRT_HOTPLUG_MONITOR_MONO		(2 << 8)
 #define   CRT_HOTPLUG_MONITOR_NONE		(0 << 8)
-/* SDVO is different across gen3/4 */
-#define   SDVOC_HOTPLUG_INT_STATUS_G4X		(1 << 3)
-#define   SDVOB_HOTPLUG_INT_STATUS_G4X		(1 << 2)
-#define   SDVOC_HOTPLUG_INT_STATUS_I965		(3 << 4)
-#define   SDVOB_HOTPLUG_INT_STATUS_I965		(3 << 2)
-#define   SDVOC_HOTPLUG_INT_STATUS_I915		(1 << 7)
-#define   SDVOB_HOTPLUG_INT_STATUS_I915		(1 << 6)
+#define   SDVOC_HOTPLUG_INT_STATUS		(1 << 7)
+#define   SDVOB_HOTPLUG_INT_STATUS		(1 << 6)
 
 /* SDVO port control */
 #define SDVOB			0x61140
@@ -2811,7 +2791,7 @@
 #define   DVS_FORMAT_RGBX888	(2<<25)
 #define   DVS_FORMAT_RGBX161616	(3<<25)
 #define   DVS_SOURCE_KEY	(1<<22)
-#define   DVS_RGB_ORDER_XBGR	(1<<20)
+#define   DVS_RGB_ORDER_RGBX	(1<<20)
 #define   DVS_YUV_BYTE_ORDER_MASK (3<<16)
 #define   DVS_YUV_ORDER_YUYV	(0<<16)
 #define   DVS_YUV_ORDER_UYVY	(1<<16)
@@ -3431,11 +3411,6 @@
 #define TRANS_CHICKEN2(pipe) _PIPE(pipe, _TRANSA_CHICKEN2, _TRANSB_CHICKEN2)
 #define   TRANS_AUTOTRAIN_GEN_STALL_DIS	(1<<31)
 
-#define SOUTH_CHICKEN1		0xc2000
-#define  FDIA_PHASE_SYNC_SHIFT_OVR	19
-#define  FDIA_PHASE_SYNC_SHIFT_EN	18
-#define FDI_PHASE_SYNC_OVR(pipe) (1<<(FDIA_PHASE_SYNC_SHIFT_OVR - ((pipe) * 2)))
-#define FDI_PHASE_SYNC_EN(pipe) (1<<(FDIA_PHASE_SYNC_SHIFT_EN - ((pipe) * 2)))
 #define SOUTH_CHICKEN2		0xc2004
 #define  DPLS_EDP_PPS_FIX_DIS	(1<<0)
 
@@ -3741,7 +3716,7 @@
 #define EDP_LINK_TRAIN_600MV_0DB_IVB		(0x30 <<22)
 #define EDP_LINK_TRAIN_600MV_3_5DB_IVB		(0x36 <<22)
 #define EDP_LINK_TRAIN_800MV_0DB_IVB		(0x38 <<22)
-#define EDP_LINK_TRAIN_800MV_3_5DB_IVB		(0x3e <<22)
+#define EDP_LINK_TRAIN_800MV_3_5DB_IVB		(0x33 <<22)
 
 /* legacy values */
 #define EDP_LINK_TRAIN_500MV_0DB_IVB		(0x00 <<22)
@@ -3767,9 +3742,6 @@
 
 #define  GT_FIFO_FREE_ENTRIES			0x120008
 #define    GT_FIFO_NUM_RESERVED_ENTRIES		20
-
-#define GEN6_UCGCTL1				0x9400
-# define GEN6_BLBUNIT_CLOCK_GATE_DISABLE		(1 << 5)
 
 #define GEN6_UCGCTL2				0x9404
 # define GEN6_RCZUNIT_CLOCK_GATE_DISABLE		(1 << 13)

@@ -23,8 +23,6 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/seq_file.h>
-#include <linux/cryptouser.h>
-#include <net/netlink.h>
 
 #include <crypto/scatterwalk.h>
 
@@ -51,6 +49,11 @@ static inline void ablkcipher_buffer_write(struct ablkcipher_buffer *p)
 void __ablkcipher_walk_complete(struct ablkcipher_walk *walk)
 {
 	struct ablkcipher_buffer *p, *tmp;
+
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return;
+#endif
 
 	list_for_each_entry_safe(p, tmp, &walk->buffers, entry) {
 		ablkcipher_buffer_write(p);
@@ -113,6 +116,11 @@ int ablkcipher_walk_done(struct ablkcipher_request *req,
 {
 	struct crypto_tfm *tfm = req->base.tfm;
 	unsigned int nbytes = 0;
+
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 
 	if (likely(err >= 0)) {
 		unsigned int n = walk->nbytes - err;
@@ -383,35 +391,6 @@ static int crypto_init_ablkcipher_ops(struct crypto_tfm *tfm, u32 type,
 	return 0;
 }
 
-#ifdef CONFIG_NET
-static int crypto_ablkcipher_report(struct sk_buff *skb, struct crypto_alg *alg)
-{
-	struct crypto_report_blkcipher rblkcipher;
-
-	strncpy(rblkcipher.type, "ablkcipher", sizeof(rblkcipher.type));
-	strncpy(rblkcipher.geniv, alg->cra_ablkcipher.geniv ?: "<default>",
-		sizeof(rblkcipher.geniv));
-
-	rblkcipher.blocksize = alg->cra_blocksize;
-	rblkcipher.min_keysize = alg->cra_ablkcipher.min_keysize;
-	rblkcipher.max_keysize = alg->cra_ablkcipher.max_keysize;
-	rblkcipher.ivsize = alg->cra_ablkcipher.ivsize;
-
-	NLA_PUT(skb, CRYPTOCFGA_REPORT_BLKCIPHER,
-		sizeof(struct crypto_report_blkcipher), &rblkcipher);
-
-	return 0;
-
-nla_put_failure:
-	return -EMSGSIZE;
-}
-#else
-static int crypto_ablkcipher_report(struct sk_buff *skb, struct crypto_alg *alg)
-{
-	return -ENOSYS;
-}
-#endif
-
 static void crypto_ablkcipher_show(struct seq_file *m, struct crypto_alg *alg)
 	__attribute__ ((unused));
 static void crypto_ablkcipher_show(struct seq_file *m, struct crypto_alg *alg)
@@ -434,7 +413,6 @@ const struct crypto_type crypto_ablkcipher_type = {
 #ifdef CONFIG_PROC_FS
 	.show = crypto_ablkcipher_show,
 #endif
-	.report = crypto_ablkcipher_report,
 };
 EXPORT_SYMBOL_GPL(crypto_ablkcipher_type);
 
@@ -464,35 +442,6 @@ static int crypto_init_givcipher_ops(struct crypto_tfm *tfm, u32 type,
 	return 0;
 }
 
-#ifdef CONFIG_NET
-static int crypto_givcipher_report(struct sk_buff *skb, struct crypto_alg *alg)
-{
-	struct crypto_report_blkcipher rblkcipher;
-
-	strncpy(rblkcipher.type, "givcipher", sizeof(rblkcipher.type));
-	strncpy(rblkcipher.geniv, alg->cra_ablkcipher.geniv ?: "<built-in>",
-		sizeof(rblkcipher.geniv));
-
-	rblkcipher.blocksize = alg->cra_blocksize;
-	rblkcipher.min_keysize = alg->cra_ablkcipher.min_keysize;
-	rblkcipher.max_keysize = alg->cra_ablkcipher.max_keysize;
-	rblkcipher.ivsize = alg->cra_ablkcipher.ivsize;
-
-	NLA_PUT(skb, CRYPTOCFGA_REPORT_BLKCIPHER,
-		sizeof(struct crypto_report_blkcipher), &rblkcipher);
-
-	return 0;
-
-nla_put_failure:
-	return -EMSGSIZE;
-}
-#else
-static int crypto_givcipher_report(struct sk_buff *skb, struct crypto_alg *alg)
-{
-	return -ENOSYS;
-}
-#endif
-
 static void crypto_givcipher_show(struct seq_file *m, struct crypto_alg *alg)
 	__attribute__ ((unused));
 static void crypto_givcipher_show(struct seq_file *m, struct crypto_alg *alg)
@@ -515,7 +464,6 @@ const struct crypto_type crypto_givcipher_type = {
 #ifdef CONFIG_PROC_FS
 	.show = crypto_givcipher_show,
 #endif
-	.report = crypto_givcipher_report,
 };
 EXPORT_SYMBOL_GPL(crypto_givcipher_type);
 
@@ -613,7 +561,8 @@ out:
 	return err;
 }
 
-struct crypto_alg *crypto_lookup_skcipher(const char *name, u32 type, u32 mask)
+static struct crypto_alg *crypto_lookup_skcipher(const char *name, u32 type,
+						 u32 mask)
 {
 	struct crypto_alg *alg;
 
@@ -651,13 +600,17 @@ struct crypto_alg *crypto_lookup_skcipher(const char *name, u32 type, u32 mask)
 
 	return ERR_PTR(crypto_givcipher_default(alg, type, mask));
 }
-EXPORT_SYMBOL_GPL(crypto_lookup_skcipher);
 
 int crypto_grab_skcipher(struct crypto_skcipher_spawn *spawn, const char *name,
 			 u32 type, u32 mask)
 {
 	struct crypto_alg *alg;
 	int err;
+
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 
 	type = crypto_skcipher_type(type);
 	mask = crypto_skcipher_mask(mask);

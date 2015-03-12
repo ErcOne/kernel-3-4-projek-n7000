@@ -98,12 +98,11 @@ void *v4l2_m2m_next_buf(struct v4l2_m2m_queue_ctx *q_ctx)
 
 	spin_lock_irqsave(&q_ctx->rdy_spinlock, flags);
 
-	if (list_empty(&q_ctx->rdy_queue)) {
-		spin_unlock_irqrestore(&q_ctx->rdy_spinlock, flags);
-		return NULL;
-	}
+	if (list_empty(&q_ctx->rdy_queue))
+		goto end;
 
 	b = list_entry(q_ctx->rdy_queue.next, struct v4l2_m2m_buffer, list);
+end:
 	spin_unlock_irqrestore(&q_ctx->rdy_spinlock, flags);
 	return &b->vb;
 }
@@ -119,13 +118,12 @@ void *v4l2_m2m_buf_remove(struct v4l2_m2m_queue_ctx *q_ctx)
 	unsigned long flags;
 
 	spin_lock_irqsave(&q_ctx->rdy_spinlock, flags);
-	if (list_empty(&q_ctx->rdy_queue)) {
-		spin_unlock_irqrestore(&q_ctx->rdy_spinlock, flags);
-		return NULL;
+	if (!list_empty(&q_ctx->rdy_queue)) {
+		b = list_entry(q_ctx->rdy_queue.next, struct v4l2_m2m_buffer,
+				list);
+		list_del(&b->list);
+		q_ctx->num_rdy--;
 	}
-	b = list_entry(q_ctx->rdy_queue.next, struct v4l2_m2m_buffer, list);
-	list_del(&b->list);
-	q_ctx->num_rdy--;
 	spin_unlock_irqrestore(&q_ctx->rdy_spinlock, flags);
 
 	return &b->vb;
@@ -228,7 +226,7 @@ EXPORT_SYMBOL(v4l2_m2m_get_next_job);
  * An example of the above could be an instance that requires more than one
  * src/dst buffer per transaction.
  */
-void v4l2_m2m_try_schedule(struct v4l2_m2m_ctx *m2m_ctx)
+static void v4l2_m2m_try_schedule(struct v4l2_m2m_ctx *m2m_ctx)
 {
 	struct v4l2_m2m_dev *m2m_dev;
 	unsigned long flags_job, flags;
@@ -420,6 +418,7 @@ int v4l2_m2m_streamoff(struct file *file, struct v4l2_m2m_ctx *m2m_ctx,
 {
 	struct vb2_queue *vq;
 
+	m2m_ctx->job_flags |= TRANS_STOPPED;
 	vq = v4l2_m2m_get_vq(m2m_ctx, type);
 	return vb2_streamoff(vq, type);
 }

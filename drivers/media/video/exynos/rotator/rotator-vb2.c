@@ -12,7 +12,32 @@
 #include <linux/platform_device.h>
 #include "rotator.h"
 
-#if defined(CONFIG_VIDEOBUF2_ION)
+#if defined(CONFIG_VIDEOBUF2_CMA_PHYS)
+void *rot_cma_init(struct rot_dev *rot)
+{
+	return vb2_cma_phys_init(rot->dev, NULL, 0, false);
+}
+
+int rot_cma_resume(void *alloc_ctx)
+{
+	return 1;
+}
+void rot_cma_suspend(void *alloc_ctx) {}
+void rot_cma_set_cacheable(void *alloc_ctx, bool cacheable) {}
+int rot_cma_cache_flush(struct vb2_buffer *vb, u32 plane_no) { return 0; }
+
+const struct rot_vb2 rot_vb2_cma = {
+	.ops		= &vb2_cma_phys_memops,
+	.init		= rot_cma_init,
+	.cleanup	= vb2_cma_phys_cleanup,
+	.plane_addr	= vb2_cma_phys_plane_paddr,
+	.resume		= rot_cma_resume,
+	.suspend	= rot_cma_suspend,
+	.cache_flush	= rot_cma_cache_flush,
+	.set_cacheable	= rot_cma_set_cacheable,
+};
+
+#elif defined(CONFIG_VIDEOBUF2_ION)
 void *rot_ion_init(struct rot_dev *rot)
 {
 	return vb2_ion_create_context(rot->dev, SZ_1M,

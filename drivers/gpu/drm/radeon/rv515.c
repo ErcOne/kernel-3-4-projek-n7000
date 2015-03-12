@@ -149,7 +149,7 @@ void rv515_gpu_init(struct radeon_device *rdev)
 
 	if (r100_gui_wait_for_idle(rdev)) {
 		printk(KERN_WARNING "Failed to wait GUI idle while "
-		       "resetting GPU. Bad things might happen.\n");
+		       "reseting GPU. Bad things might happen.\n");
 	}
 	rv515_vga_render_disable(rdev);
 	r420_pipes_init(rdev);
@@ -161,7 +161,7 @@ void rv515_gpu_init(struct radeon_device *rdev)
 	WREG32_PLL(0x000D, tmp);
 	if (r100_gui_wait_for_idle(rdev)) {
 		printk(KERN_WARNING "Failed to wait GUI idle while "
-		       "resetting GPU. Bad things might happen.\n");
+		       "reseting GPU. Bad things might happen.\n");
 	}
 	if (rv515_mc_wait_for_idle(rdev)) {
 		printk(KERN_WARNING "Failed to wait MC idle while "
@@ -386,12 +386,6 @@ static int rv515_startup(struct radeon_device *rdev)
 	}
 
 	/* Enable IRQ */
-	if (!rdev->irq.installed) {
-		r = radeon_irq_kms_init(rdev);
-		if (r)
-			return r;
-	}
-
 	rs600_irq_set(rdev);
 	rdev->config.r300.hdp_cntl = RREG32(RADEON_HOST_PATH_CNTL);
 	/* 1M ring buffer */
@@ -524,6 +518,9 @@ int rv515_init(struct radeon_device *rdev)
 	rv515_debugfs(rdev);
 	/* Fence driver */
 	r = radeon_fence_driver_init(rdev);
+	if (r)
+		return r;
+	r = radeon_irq_kms_init(rdev);
 	if (r)
 		return r;
 	/* Memory manager */

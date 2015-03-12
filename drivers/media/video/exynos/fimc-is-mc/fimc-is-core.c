@@ -40,6 +40,11 @@
 #include "fimc-is-err.h"
 #include "fimc-is-misc.h"
 
+extern struct class *camera_class;
+struct device *camera_front = NULL; /*sys/class/camera/rear*/
+struct device *camera_rear = NULL; /*sys/class/camera/front*/
+EXPORT_SYMBOL(camera_rear);
+
 #if defined(CONFIG_VIDEOBUF2_ION)
 static void *is_vb_cookie;
 void *buf_start;
@@ -106,9 +111,9 @@ int fimc_is_init_mem(struct fimc_is_dev *dev)
 	dbg("fimc_is_init_mem - ION\n");
 	sprintf(cma_name, "%s%d", "fimc_is", 0);
 	err = cma_info(&mem_info, &dev->pdev->dev, 0);
-	dbg("%s : [cma_info] start_addr : 0x%x, end_addr : 0x%x\n",
-			__func__, mem_info.lower_bound, mem_info.upper_bound);
-	dbg("total_size : 0x%x, free_size : 0x%x\n",
+	dbg("%s : [cma_info] start_addr : 0x%x, end_addr : 0x%x, "
+			"total_size : 0x%x, free_size : 0x%x\n",
+			__func__, mem_info.lower_bound, mem_info.upper_bound,
 			mem_info.total_size, mem_info.free_size);
 	if (err) {
 		dev_err(&dev->pdev->dev, "%s: get cma info failed\n", __func__);
@@ -564,9 +569,8 @@ int fimc_is_init_set(struct fimc_is_dev *dev , u32 val)
 		set_bit(FIMC_IS_DEBUG_DIS, &debug_device);
 		*/
 
-
-		fimc_is_hw_set_debug_level(dev,	FIMC_IS_DEBUG_UART,
-					debug_device, FIMC_IS_A5_DEBUG_LEVEL);
+		fimc_is_hw_set_debug_level(dev, FIMC_IS_DEBUG_UART,
+					debug_device, FIMC_IS_DEBUG_LEVEL);
 #endif
 		clear_bit(IS_ST_STREAM_OFF, &dev->state);
 		set_bit(IS_ST_RUN, &dev->state);
@@ -962,8 +966,6 @@ static int fimc_is_front_link_setup(struct media_entity *entity,
 
 	dbg("++%s\n", __func__);
 	dbg("local->index : %d\n", local->index);
-	dbg("media_entity_type(remote->entity) : %d\n",
-				media_entity_type(remote->entity));
 
 	switch (local->index | media_entity_type(remote->entity)) {
 	case FIMC_IS_FRONT_PAD_SINK | MEDIA_ENT_T_V4L2_SUBDEV:
@@ -1182,6 +1184,7 @@ static struct exynos_md *fimc_is_get_md(enum mdev_node node)
 
 	ret = driver_for_each_device(drv, NULL, &md[0],
 				     fimc_is_get_md_callback);
+	put_driver(drv);
 
 	return ret ? NULL : md[node];
 
@@ -1440,6 +1443,46 @@ static irqreturn_t fimc_is_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static ssize_t s5k4e5_camera_rear_camtype_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	char type[] = "SLSI_S5K4E5_FIMC_IS";
+
+	return sprintf(buf, "%s\n", type);
+}
+
+static ssize_t s5k4e5_camera_rear_camfw_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	char type[] = "S5K4E5";
+	return sprintf(buf, "%s %s\n", type, type);
+
+}
+
+static ssize_t s5k6a3_camera_front_camtype_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	char type[] = "SLSI_S5K6A3_FIMC_IS";
+
+	return sprintf(buf, "%s\n", type);
+}
+
+static ssize_t s5k6a3_camera_front_camfw_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	char type[] = "S5K6A3";
+	return sprintf(buf, "%s %s\n", type, type);
+
+}
+
+static DEVICE_ATTR(rear_camtype, S_IWUSR|S_IWGRP|S_IROTH,
+		s5k4e5_camera_rear_camtype_show, NULL);
+static DEVICE_ATTR(rear_camfw, S_IWUSR|S_IWGRP|S_IROTH, s5k4e5_camera_rear_camfw_show, NULL);
+
+static DEVICE_ATTR(front_camtype, S_IWUSR|S_IWGRP|S_IROTH,
+		s5k6a3_camera_front_camtype_show, NULL);
+static DEVICE_ATTR(front_camfw, S_IWUSR|S_IWGRP|S_IROTH, s5k6a3_camera_front_camfw_show, NULL);
+
 static int fimc_is_probe(struct platform_device *pdev)
 {
 	struct resource *mem_res;
@@ -1622,7 +1665,7 @@ static int fimc_is_probe(struct platform_device *pdev)
 	scalerc_q = &isp->video[FIMC_IS_VIDEO_NUM_SCALERC].vbq;
 	memset(scalerc_q, 0, sizeof(*scalerc_q));
 	scalerc_q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	scalerc_q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
+	scalerc_q->io_modes = VB2_MMAP | VB2_USERPTR;
 	scalerc_q->drv_priv = &isp->video[FIMC_IS_VIDEO_NUM_SCALERC];
 	scalerc_q->ops = &fimc_is_scalerc_qops;
 	scalerc_q->mem_ops = isp->vb2->ops;
@@ -1667,7 +1710,7 @@ static int fimc_is_probe(struct platform_device *pdev)
 	scalerp_q = &isp->video[FIMC_IS_VIDEO_NUM_SCALERP].vbq;
 	memset(scalerp_q, 0, sizeof(*scalerp_q));
 	scalerp_q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	scalerp_q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
+	scalerp_q->io_modes = VB2_MMAP | VB2_USERPTR;
 	scalerp_q->drv_priv = &isp->video[FIMC_IS_VIDEO_NUM_SCALERP];
 	scalerp_q->ops = &fimc_is_scalerp_qops;
 	scalerp_q->mem_ops = isp->vb2->ops;
@@ -1714,7 +1757,7 @@ static int fimc_is_probe(struct platform_device *pdev)
 	dnr_q = &isp->video[FIMC_IS_VIDEO_NUM_3DNR].vbq;
 	memset(dnr_q, 0, sizeof(*dnr_q));
 	dnr_q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	dnr_q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
+	dnr_q->io_modes = VB2_MMAP | VB2_USERPTR;
 	dnr_q->drv_priv = &isp->video[FIMC_IS_VIDEO_NUM_3DNR];
 	dnr_q->ops = &fimc_is_3dnr_qops;
 	dnr_q->mem_ops = isp->vb2->ops;
@@ -1757,7 +1800,7 @@ static int fimc_is_probe(struct platform_device *pdev)
 	bayer_q = &isp->video[FIMC_IS_VIDEO_NUM_BAYER].vbq;
 	memset(bayer_q, 0, sizeof(*bayer_q));
 	bayer_q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	bayer_q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
+	bayer_q->io_modes = VB2_MMAP | VB2_USERPTR;
 	bayer_q->drv_priv = &isp->video[FIMC_IS_VIDEO_NUM_BAYER];
 	bayer_q->ops = &fimc_is_bayer_qops;
 	bayer_q->mem_ops = isp->vb2->ops;
@@ -1861,11 +1904,36 @@ static int fimc_is_probe(struct platform_device *pdev)
 		goto p_err3;
 	}
 
-#if defined(CONFIG_PM_RUNTIME)
+#if defined(CONFIG_EXYNOS_DEV_PD) && defined(CONFIG_PM_RUNTIME)
 	pm_runtime_enable(&pdev->dev);
 #endif
 
-	printk(KERN_INFO "fimc-is-mc probe success\n");
+	if (camera_rear == NULL)
+		camera_rear = device_create(camera_class, NULL, 0, NULL, "rear");
+	if (camera_front == NULL)
+		camera_front = device_create(camera_class, NULL, 0, NULL, "front");
+	if (IS_ERR(camera_rear) || IS_ERR(camera_front)) {
+		printk(KERN_ERR "failed to create device!\n");
+	} else {
+		if (device_create_file(camera_front, &dev_attr_front_camtype) < 0) {
+			printk(KERN_ERR "failed to create device file, %s\n",
+				dev_attr_front_camtype.attr.name);
+		}
+		if (device_create_file(camera_front, &dev_attr_front_camfw) < 0) {
+			printk(KERN_ERR "failed to create device file, %s\n",
+				dev_attr_front_camfw.attr.name);
+		}
+		if (device_create_file(camera_rear, &dev_attr_rear_camtype) < 0) {
+			printk(KERN_ERR "failed to create device file, %s\n",
+				dev_attr_rear_camtype.attr.name);
+		}
+		if (device_create_file(camera_rear, &dev_attr_rear_camfw) < 0) {
+			printk(KERN_ERR "failed to create device file, %s\n",
+				dev_attr_rear_camfw.attr.name);
+		}
+	}
+
+	dbg("%s : fimc_is_front_%d probe success\n", __func__, pdev->id);
 	return 0;
 
 p_err3:
@@ -1916,5 +1984,5 @@ module_init(fimc_is_init);
 module_exit(fimc_is_exit);
 
 MODULE_AUTHOR("Jiyoung Shin<idon.shin@samsung.com>");
-MODULE_DESCRIPTION("Exynos FIMC_IS driver");
+MODULE_DESCRIPTION("Exynos FIMC_IS front end driver");
 MODULE_LICENSE("GPL");

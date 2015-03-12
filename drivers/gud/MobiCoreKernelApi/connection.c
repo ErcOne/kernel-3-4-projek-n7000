@@ -4,11 +4,7 @@
  *
  * Connection data.
  *
- * <!-- Copyright Giesecke & Devrient GmbH 2009 - 2012 -->
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * <!-- Copyright Giesecke & Devrient GmbH 2009 - 2011 -->
  */
 #include <linux/types.h>
 #include <linux/slab.h>
@@ -23,83 +19,83 @@
 #include "connection.h"
 #include "common.h"
 
-/* Define the initial state of the Data Available Semaphore */
-#define SEM_NO_DATA_AVAILABLE 0
-
-/*----------------------------------------------------------------------------*/
-struct connection *connection_new(
-	void
+//------------------------------------------------------------------------------
+connection_t *connection_new(
+    void
 ) {
-	struct connection *conn = kzalloc(sizeof(struct connection),
-					GFP_KERNEL);
-	conn->sequence_magic = mcapi_unique_id();
-	mutex_init(&conn->data_lock);
-	/* No data available */
-	sema_init(&conn->data_available_sem, SEM_NO_DATA_AVAILABLE);
+    connection_t *conn = kzalloc(sizeof(connection_t), GFP_KERNEL);
+	conn->sequenceMagic = mcapi_unique_id();
+	sema_init(&conn->dataSem, 1);
+	// No data available
+	sema_init(&conn->dataAvailableSem, 0);
 
 	mcapi_insert_connection(conn);
-	return conn;
+    return conn;
 }
 
-/*----------------------------------------------------------------------------*/
-struct connection *connection_create(
-	int	 socket_descriptor,
-	pid_t   dest
+//------------------------------------------------------------------------------
+connection_t *connection_create(
+    int     socketDescriptor,
+    pid_t   dest
 ) {
-	struct connection *conn = connection_new();
+    connection_t *conn = connection_new();
 
-	conn->peer_pid = dest;
-	return conn;
+    conn->peerPid = dest;
+    return conn;
 }
 
 
-/*----------------------------------------------------------------------------*/
+//------------------------------------------------------------------------------
 void connection_cleanup(
-	struct connection *conn
+    connection_t *conn
 ) {
-	if (!conn)
-		return;
+    if (!conn)
+        return;
 
 	kfree_skb(conn->skb);
 
-	mcapi_remove_connection(conn->sequence_magic);
-	kfree(conn);
+	mcapi_remove_connection(conn->sequenceMagic);
+    kfree(conn);
 }
 
 
-/*----------------------------------------------------------------------------*/
+//------------------------------------------------------------------------------
 bool connection_connect(
-	struct connection *conn,
-	pid_t		dest
+    connection_t *conn,
+    pid_t        dest
 ) {
-	/* Nothing to connect */
-	conn->peer_pid = dest;
+	// Nothing to connect
+	conn->peerPid = dest;
 	return true;
 }
 
-/*----------------------------------------------------------------------------*/
+//------------------------------------------------------------------------------
 size_t connection_readDataMsg(
-	struct connection *conn,
-	void *buffer,
-	uint32_t len
+    connection_t *conn,
+    void *buffer,
+    uint32_t len
 ) {
 	size_t ret = -1;
 	MCDRV_DBG_VERBOSE("reading connection data %u, connection data left %u",
-			len, conn->data_len);
-	/* trying to read more than the left data */
-	if (len > conn->data_len) {
-		ret = conn->data_len;
-		memcpy(buffer, conn->data_start, conn->data_len);
-		conn->data_len = 0;
-	} else {
+			len, conn->dataLen);
+	// trying to read more than the left data
+	if (len > conn->dataLen)
+	{
+		ret = conn->dataLen;
+		memcpy(buffer, conn->dataStart, conn->dataLen);
+		conn->dataLen = 0;
+	}
+	else
+	{
 		ret = len;
-		memcpy(buffer, conn->data_start, len);
-		conn->data_len -= len;
-		conn->data_start += len;
+		memcpy(buffer, conn->dataStart, len);
+		conn->dataLen -= len;
+		conn->dataStart += len;
 	}
 
-	if (conn->data_len == 0)	{
-		conn->data_start = NULL;
+	if (conn->dataLen == 0)
+	{
+		conn->dataStart = NULL;
 		kfree_skb(conn->skb);
 		conn->skb = NULL;
 	}
@@ -107,71 +103,67 @@ size_t connection_readDataMsg(
 	return ret;
 }
 
-/*----------------------------------------------------------------------------*/
-size_t connection_read_datablock(
-	struct connection *conn,
-	void		 *buffer,
-	uint32_t	 len
+//------------------------------------------------------------------------------
+size_t connection_readDataBlock(
+    connection_t *conn,
+    void         *buffer,
+    uint32_t     len
 ) {
-	return connection_read_data(conn, buffer, len, -1);
+	return connection_readData(conn, buffer, len, -1);
 }
 
 
-/*----------------------------------------------------------------------------*/
-size_t connection_read_data(
-	struct connection *conn,
-	void		*buffer,
-	uint32_t	len,
-	int32_t		timeout
+//------------------------------------------------------------------------------
+size_t connection_readData(
+    connection_t *conn,
+    void         *buffer,
+    uint32_t     len,
+    int32_t      timeout
 ) {
 	size_t ret = 0;
 
-	MCDRV_ASSERT(buffer != NULL);
-	MCDRV_ASSERT(conn->socket_descriptor != NULL);
+	MCDRV_ASSERT(NULL != buffer);
+	MCDRV_ASSERT(NULL != conn->socketDescriptor);
 
 	MCDRV_DBG_VERBOSE("read data len = %u for PID = %u",
-						len, conn->sequence_magic);
-	do {
-		/* Wait until data is available or timeout
-		   msecs_to_jiffies(-1) -> wait forever for the sem */
-		if (down_timeout(&(conn->data_available_sem),
-				  msecs_to_jiffies(timeout))) {
-			MCDRV_DBG_VERBOSE("Timeout reading the data sem");
-			ret = -2;
-			break;
-		}
+						len, conn->sequenceMagic);
 
-		if (mutex_lock_interruptible(&(conn->data_lock))) {
-			MCDRV_DBG_ERROR("interrupted reading the data sem");
-			ret = -1;
-			break;
-		}
-		/* Have data, use it */
-		if (conn->data_len > 0)
-			ret = connection_readDataMsg(conn, buffer, len);
+	// Wait until data is available or timeout
+	//msecs_to_jiffies(-1) -> wait forever for the sem
+	if(down_timeout(&(conn->dataAvailableSem), msecs_to_jiffies(timeout))){
+		MCDRV_DBG_VERBOSE("Timeout while trying to read the data sem");
+		return -2;
+	}
 
-			mutex_unlock(&(conn->data_lock));
+	if(down_interruptible(&(conn->dataSem))){
+		MCDRV_DBG_ERROR("interrupted while trying to read the data sem");
+		return -1;
+	}
+	// Have data, use it
+	if (conn->dataLen > 0) {
+		ret = connection_readDataMsg(conn, buffer, len);
+	}
+	up(&(conn->dataSem));
 
-		/* There is still some data left */
-		if (conn->data_len > 0)
-			up(&conn->data_available_sem);
-	} while (0);
+	// There is still some data left
+	if(conn->dataLen > 0)
+		up(&conn->dataAvailableSem);
 
 	return ret;
 }
 
-/*----------------------------------------------------------------------------*/
-size_t connection_write_data(
-	struct connection *conn,
-	void		 *buffer,
-	uint32_t	 len
+//------------------------------------------------------------------------------
+size_t connection_writeData(
+    connection_t *conn,
+    void         *buffer,
+    uint32_t     len
 ) {
-	struct sk_buff *skb = NULL;
+	struct sk_buff * skb = NULL;
 	struct nlmsghdr *nlh;
 	int ret = 0;
 
 	MCDRV_DBG_VERBOSE("buffer length %u from pid %u\n",
-		  len,  conn->sequence_magic);
+		  len,  conn->sequenceMagic);
 	do {
 		skb = nlmsg_new(NLMSG_SPACE(len), GFP_KERNEL);
 		if (!skb) {
@@ -179,51 +171,48 @@ size_t connection_write_data(
 			break;
 		}
 
-		nlh = nlmsg_put(skb, 0, conn->sequence_magic, 2,
-					  NLMSG_LENGTH(len), NLM_F_REQUEST);
+		nlh = nlmsg_put(skb, 0, conn->sequenceMagic, 2,
+						  NLMSG_LENGTH(len), NLM_F_REQUEST);
 		if (!nlh) {
 			ret = -1;
 			break;
 		}
 		memcpy(NLMSG_DATA(nlh), buffer, len);
 
-		netlink_unicast(conn->socket_descriptor, skb,
-						conn->peer_pid, MSG_DONTWAIT);
+		netlink_unicast(conn->socketDescriptor, skb,
+						conn->peerPid, MSG_DONTWAIT);
 		ret = len;
-	} while (0);
+	} while(0);
 
-	if (!ret && skb != NULL)
+	if(!ret && skb != NULL){
 		kfree_skb(skb);
+	}
 
 	return ret;
 }
 
 int connection_process(
-	struct connection *conn,
+	connection_t *conn,
 	struct sk_buff *skb
 )
 {
-	int ret = 0;
-	do {
-		if (mutex_lock_interruptible(&(conn->data_lock))) {
-			MCDRV_DBG_ERROR("Interrupted getting data semaphore!");
-			ret = -1;
-			break;
-		}
+	//is down_timeout a better choice?
+	if(down_interruptible(&(conn->dataSem))){
+		MCDRV_DBG_ERROR("Interrupted while getting the data semaphore!");
+		return -1;
+	}
 
-		kfree_skb(conn->skb);
+	kfree_skb(conn->skb);
 
-		/* Get a reference to the incomming skb */
-		conn->skb = skb_get(skb);
-		if (conn->skb) {
-			conn->data_msg = nlmsg_hdr(conn->skb);
-			conn->data_len = NLMSG_PAYLOAD(conn->data_msg, 0);
-			conn->data_start = NLMSG_DATA(conn->data_msg);
-			up(&(conn->data_available_sem));
-		}
-		mutex_unlock(&(conn->data_lock));
-		ret = 0;
-	} while (0);
-	return ret;
+	/* Get a reference to the incomming skb */
+	conn->skb = skb_get(skb);
+	if(conn->skb) {
+		conn->dataMsg = nlmsg_hdr(conn->skb);
+		conn->dataLen = NLMSG_PAYLOAD(conn->dataMsg, 0);
+		conn->dataStart = NLMSG_DATA(conn->dataMsg);
+		up(&(conn->dataAvailableSem));
+	}
+	up(&(conn->dataSem));
+	return 0;
 }
 /** @} */

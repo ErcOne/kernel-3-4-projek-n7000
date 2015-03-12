@@ -100,11 +100,10 @@ static void mxr_graph_stream_set(struct mxr_layer *layer, int en)
 	mxr_reg_graph_layer_stream(layer->mdev, layer->idx, en);
 }
 
-static void mxr_graph_format_set(struct mxr_layer *layer,
-				 const struct mxr_format *fmt,
-				 struct mxr_geometry *geo)
+static void mxr_graph_format_set(struct mxr_layer *layer)
 {
-	mxr_reg_graph_format(layer->mdev, layer->idx, fmt, geo);
+	mxr_reg_graph_format(layer->mdev, layer->idx,
+			layer->fmt, &layer->geo);
 }
 
 static void mxr_graph_fix_geometry(struct mxr_layer *layer)

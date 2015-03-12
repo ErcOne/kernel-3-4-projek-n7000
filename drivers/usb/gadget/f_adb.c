@@ -67,6 +67,31 @@ static struct usb_interface_descriptor adb_interface_desc = {
 	.bInterfaceProtocol     = 1,
 };
 
+static struct usb_endpoint_descriptor adb_superspeed_in_desc = {
+	.bLength                = USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType        = USB_DT_ENDPOINT,
+	.bEndpointAddress       = USB_DIR_IN,
+	.bmAttributes           = USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize         = __constant_cpu_to_le16(1024),
+};
+
+static struct usb_endpoint_descriptor adb_superspeed_out_desc = {
+	.bLength                = USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType        = USB_DT_ENDPOINT,
+	.bEndpointAddress       = USB_DIR_OUT,
+	.bmAttributes           = USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize         = __constant_cpu_to_le16(1024),
+};
+
+static struct usb_ss_ep_comp_descriptor adb_superspeed_bulk_comp_desc = {
+	.bLength =              sizeof adb_superspeed_bulk_comp_desc,
+	.bDescriptorType =      USB_DT_SS_ENDPOINT_COMP,
+
+	/* the following 2 values can be tweaked if necessary */
+	/* .bMaxBurst =         0, */
+	/* .bmAttributes =      0, */
+};
+
 static struct usb_endpoint_descriptor adb_highspeed_in_desc = {
 	.bLength                = USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType        = USB_DT_ENDPOINT,
@@ -108,6 +133,15 @@ static struct usb_descriptor_header *hs_adb_descs[] = {
 	(struct usb_descriptor_header *) &adb_interface_desc,
 	(struct usb_descriptor_header *) &adb_highspeed_in_desc,
 	(struct usb_descriptor_header *) &adb_highspeed_out_desc,
+	NULL,
+};
+
+static struct usb_descriptor_header *ss_adb_descs[] = {
+	(struct usb_descriptor_header *) &adb_interface_desc,
+	(struct usb_descriptor_header *) &adb_superspeed_in_desc,
+	(struct usb_descriptor_header *) &adb_superspeed_bulk_comp_desc,
+	(struct usb_descriptor_header *) &adb_superspeed_out_desc,
+	(struct usb_descriptor_header *) &adb_superspeed_bulk_comp_desc,
 	NULL,
 };
 
@@ -207,7 +241,7 @@ static void adb_complete_out(struct usb_ep *ep, struct usb_request *req)
 	struct adb_dev *dev = _adb_dev;
 
 	dev->rx_done = 1;
-	if (req->status != 0 && req->status != -ECONNRESET)
+	if (req->status != 0)
 		dev->error = 1;
 
 	wake_up(&dev->read_wq);
@@ -270,12 +304,14 @@ static ssize_t adb_read(struct file *fp, char __user *buf,
 	struct adb_dev *dev = fp->private_data;
 	struct usb_request *req;
 	int r = count, xfer;
-	int maxp;
 	int ret;
 
 	pr_debug("adb_read(%d)\n", count);
 	if (!_adb_dev)
 		return -ENODEV;
+
+	if (count > ADB_BULK_BUFFER_SIZE)
+		return -EINVAL;
 
 	if (adb_lock(&dev->read_excl))
 		return -EBUSY;
@@ -295,12 +331,6 @@ static ssize_t adb_read(struct file *fp, char __user *buf,
 		goto done;
 	}
 
-	maxp = usb_endpoint_maxp(dev->ep_out->desc);
-	count = round_up(count, maxp);
-
-	if (count > ADB_BULK_BUFFER_SIZE)
-		return -EINVAL;
-
 requeue_req:
 	/* queue a request */
 	req = dev->rx_req;
@@ -319,8 +349,7 @@ requeue_req:
 	/* wait for a request to complete */
 	ret = wait_event_interruptible(dev->read_wq, dev->rx_done);
 	if (ret < 0) {
-		if (ret != -ERESTARTSYS)
-			dev->error = 1;
+		dev->error = 1;
 		r = ret;
 		usb_ep_dequeue(dev->ep_out, req);
 		goto done;
@@ -332,6 +361,7 @@ requeue_req:
 
 		pr_debug("rx %p %d\n", req, req->actual);
 		xfer = (req->actual < count) ? req->actual : count;
+		r = xfer;
 		if (copy_to_user(buf, req->buf, xfer))
 			r = -EFAULT;
 
@@ -441,7 +471,7 @@ static int adb_release(struct inode *ip, struct file *fp)
 }
 
 /* file operations for ADB device /dev/android_adb */
-static const struct file_operations adb_fops = {
+static struct file_operations adb_fops = {
 	.owner = THIS_MODULE,
 	.read = adb_read,
 	.write = adb_write,
@@ -489,7 +519,16 @@ adb_function_bind(struct usb_configuration *c, struct usb_function *f)
 			adb_fullspeed_out_desc.bEndpointAddress;
 	}
 
+	/* support super speed hardware */
+	if (gadget_is_superspeed(c->cdev->gadget)) {
+		adb_superspeed_in_desc.bEndpointAddress =
+			adb_fullspeed_in_desc.bEndpointAddress;
+		adb_superspeed_out_desc.bEndpointAddress =
+			adb_fullspeed_out_desc.bEndpointAddress;
+	}
+
 	DBG(cdev, "%s speed %s: IN/%s, OUT/%s\n",
+			gadget_is_superspeed(c->cdev->gadget) ? "super" :
 			gadget_is_dualspeed(c->cdev->gadget) ? "dual" : "full",
 			f->name, dev->ep_in->name, dev->ep_out->name);
 	return 0;
@@ -520,20 +559,16 @@ static int adb_function_set_alt(struct usb_function *f,
 	int ret;
 
 	DBG(cdev, "adb_function_set_alt intf: %d alt: %d\n", intf, alt);
-
-	ret = config_ep_by_speed(cdev->gadget, f, dev->ep_in);
+	ret = usb_ep_enable(dev->ep_in,
+			ep_choose(cdev->gadget,
+				&adb_highspeed_in_desc,
+				&adb_fullspeed_in_desc));
 	if (ret)
 		return ret;
-
-	ret = usb_ep_enable(dev->ep_in);
-	if (ret)
-		return ret;
-
-	ret = config_ep_by_speed(cdev->gadget, f, dev->ep_out);
-	if (ret)
-		return ret;
-
-	ret = usb_ep_enable(dev->ep_out);
+	ret = usb_ep_enable(dev->ep_out,
+			ep_choose(cdev->gadget,
+				&adb_highspeed_out_desc,
+				&adb_fullspeed_out_desc));
 	if (ret) {
 		usb_ep_disable(dev->ep_in);
 		return ret;
@@ -572,6 +607,7 @@ static int adb_bind_config(struct usb_configuration *c)
 	dev->function.name = "adb";
 	dev->function.descriptors = fs_adb_descs;
 	dev->function.hs_descriptors = hs_adb_descs;
+	dev->function.ss_descriptors = ss_adb_descs;
 	dev->function.bind = adb_function_bind;
 	dev->function.unbind = adb_function_unbind;
 	dev->function.set_alt = adb_function_set_alt;

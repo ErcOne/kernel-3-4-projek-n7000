@@ -14,8 +14,7 @@ struct platform_device;
 
 #ifdef CONFIG_ION_EXYNOS
 extern struct platform_device exynos_device_ion;
-extern struct ion_platform_data exynos_ion_pdata;
-#else
+void exynos_ion_set_platdata(void);
 #endif
 
 #endif /* __MACH_S5PV310_ION_H_ */

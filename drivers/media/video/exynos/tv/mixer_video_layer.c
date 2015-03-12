@@ -26,16 +26,13 @@ static void mxr_video_layer_release(struct mxr_layer *layer)
 	mxr_base_layer_release(layer);
 }
 
-static void mxr_video_stream_set(struct mxr_layer *layer, int en)
-{
+static void mxr_video_stream_set(struct mxr_layer *layer, int en) {
 	mxr_reg_video_layer_stream(layer->mdev, layer->idx, en);
 }
 
-static void mxr_video_format_set(struct mxr_layer *layer,
-				 const struct mxr_format *fmt,
-				 struct mxr_geometry *geo)
+static void mxr_video_format_set(struct mxr_layer *layer)
 {
-	mxr_reg_video_geo(layer->mdev, layer->cur_mxr, layer->idx, geo);
+	mxr_reg_video_geo(layer->mdev, layer->cur_mxr, layer->idx, &layer->geo);
 }
 
 static void mxr_video_fix_geometry(struct mxr_layer *layer)

@@ -13,7 +13,9 @@
 #ifndef _S5P_DP_CORE_H
 #define _S5P_DP_CORE_H
 
-#include <linux/lcd.h>
+#ifdef CONFIG_HAS_EARLYSUSPEND
+#include <linux/earlysuspend.h>
+#endif
 
 struct link_train {
 	int eq_loop;
@@ -32,14 +34,13 @@ struct s5p_dp_device {
 	struct clk		*clock;
 	unsigned int		irq;
 	void __iomem		*reg_base;
-	int 			enabled;
-	bool			user_disabled;
-	struct mutex		lock;
 
 	struct video_info	*video_info;
 	struct link_train	link_train;
 
-	struct lcd_device	*lcd;
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	struct early_suspend	early_suspend;
+#endif
 };
 
 /* s5p_dp_reg.c */
@@ -92,6 +93,10 @@ void s5p_dp_set_link_bandwidth(struct s5p_dp_device *dp, u32 bwtype);
 void s5p_dp_get_link_bandwidth(struct s5p_dp_device *dp, u32 *bwtype);
 void s5p_dp_set_lane_count(struct s5p_dp_device *dp, u32 count);
 void s5p_dp_get_lane_count(struct s5p_dp_device *dp, u32 *count);
+void s5p_dp_set_link_bandwidth(struct s5p_dp_device *dp, u32 bwtype);
+void s5p_dp_get_link_bandwidth(struct s5p_dp_device *dp, u32 *bwtype);
+void s5p_dp_set_lane_count(struct s5p_dp_device *dp, u32 count);
+void s5p_dp_get_lane_count(struct s5p_dp_device *dp, u32 *count);
 void s5p_dp_enable_enhanced_mode(struct s5p_dp_device *dp, bool enable);
 void s5p_dp_set_training_pattern(struct s5p_dp_device *dp,
 				 enum pattern_set pattern);
@@ -132,7 +137,6 @@ void s5p_dp_config_video_slave_mode(struct s5p_dp_device *dp,
 			struct video_info *video_info);
 void s5p_dp_enable_scrambling(struct s5p_dp_device *dp);
 void s5p_dp_disable_scrambling(struct s5p_dp_device *dp);
-void s5p_dp_rx_control(struct s5p_dp_device *dp, bool enable);
 
 /* I2C EDID Chip ID, Slave Address */
 #define I2C_EDID_DEVICE_ADDR			0x50
@@ -151,17 +155,13 @@ void s5p_dp_rx_control(struct s5p_dp_device *dp, bool enable);
 #define DPCD_ADDR_LANE_COUNT_SET		0x0101
 #define DPCD_ADDR_TRAINING_PATTERN_SET		0x0102
 #define DPCD_ADDR_TRAINING_LANE0_SET		0x0103
-#define DPCD_ADDR_CONFIGURATION_SET		0x010a
 #define DPCD_ADDR_LANE0_1_STATUS		0x0202
-#define DPCD_ADDR_LANE_ALIGN_STATUS_UPDATED	0x0204
+#define DPCD_ADDR_LANE_ALIGN__STATUS_UPDATED	0x0204
 #define DPCD_ADDR_ADJUST_REQUEST_LANE0_1	0x0206
 #define DPCD_ADDR_ADJUST_REQUEST_LANE2_3	0x0207
 #define DPCD_ADDR_TEST_REQUEST			0x0218
 #define DPCD_ADDR_TEST_RESPONSE			0x0260
 #define DPCD_ADDR_TEST_EDID_CHECKSUM		0x0261
-#define DPCD_ADDR_USER_DEFINED1			0x0491
-#define DPCD_ADDR_USER_DEFINED2			0x0492
-#define DPCD_ADDR_USER_DEFINED3			0x0493
 #define DPCD_ADDR_SINK_POWER_STATE		0x0600
 
 /* DPCD_ADDR_MAX_LANE_COUNT */

@@ -31,7 +31,6 @@
 #include <net/tcp_states.h>
 
 #include <linux/phonet.h>
-#include <linux/export.h>
 #include <net/phonet/phonet.h>
 #include <net/phonet/pep.h>
 #include <net/phonet/pn_dev.h>
@@ -507,7 +506,7 @@ int pn_sock_get_port(struct sock *sk, unsigned short sport)
 
 		phonet_get_local_port_range(&pmin, &pmax);
 		for (port = pmin; port <= pmax; port++) {
-			port_cur++;
+			port_cur += PN_HASHSIZE;
 			if (port_cur < pmin || port_cur > pmax)
 				port_cur = pmin;
 
@@ -696,7 +695,7 @@ int pn_sock_unbind_res(struct sock *sk, u8 res)
 
 	mutex_lock(&resource_mutex);
 	if (pnres.sk[res] == sk) {
-		RCU_INIT_POINTER(pnres.sk[res], NULL);
+		rcu_assign_pointer(pnres.sk[res], NULL);
 		ret = 0;
 	}
 	mutex_unlock(&resource_mutex);
@@ -715,7 +714,7 @@ void pn_sock_unbind_all_res(struct sock *sk)
 	mutex_lock(&resource_mutex);
 	for (res = 0; res < 256; res++) {
 		if (pnres.sk[res] == sk) {
-			RCU_INIT_POINTER(pnres.sk[res], NULL);
+			rcu_assign_pointer(pnres.sk[res], NULL);
 			match++;
 		}
 	}

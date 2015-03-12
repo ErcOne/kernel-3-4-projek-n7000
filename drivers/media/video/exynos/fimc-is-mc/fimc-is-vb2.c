@@ -49,7 +49,6 @@ const struct fimc_is_vb2 fimc_is_vb2_cma = {
 	.set_cacheable	= fimc_is_cma_set_cacheable,
 };
 #elif defined(CONFIG_VIDEOBUF2_ION)
-
 static void *fimc_is_ion_init(struct fimc_is_dev *isp)
 {
 	return vb2_ion_create_context(&isp->pdev->dev, SZ_4K,

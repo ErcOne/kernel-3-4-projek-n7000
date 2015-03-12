@@ -69,7 +69,6 @@ static struct usb_device_id id_table[] = {
 	{ USB_VENDOR_AND_INTERFACE_INFO(UTSTARCOM_VENDOR_ID, 0xff, 0xfd, 0xff) },  /* NMEA */
 	{ USB_VENDOR_AND_INTERFACE_INFO(UTSTARCOM_VENDOR_ID, 0xff, 0xfe, 0xff) },  /* WMC */
 	{ USB_VENDOR_AND_INTERFACE_INFO(UTSTARCOM_VENDOR_ID, 0xff, 0xff, 0xff) },  /* DIAG */
-	{ USB_DEVICE_AND_INTERFACE_INFO(0x1fac, 0x0151, 0xff, 0xff, 0xff) },
 	{ },
 };
 MODULE_DEVICE_TABLE(usb, id_table);
@@ -79,6 +78,7 @@ static struct usb_driver qcaux_driver = {
 	.probe =	usb_serial_probe,
 	.disconnect =	usb_serial_disconnect,
 	.id_table =	id_table,
+	.no_dynamic_id = 	1,
 };
 
 static struct usb_serial_driver qcaux_device = {
@@ -87,12 +87,29 @@ static struct usb_serial_driver qcaux_device = {
 		.name =		"qcaux",
 	},
 	.id_table =		id_table,
+	.usb_driver =		&qcaux_driver,
 	.num_ports =		1,
 };
 
-static struct usb_serial_driver * const serial_drivers[] = {
-	&qcaux_device, NULL
-};
+static int __init qcaux_init(void)
+{
+	int retval;
 
-module_usb_serial_driver(qcaux_driver, serial_drivers);
+	retval = usb_serial_register(&qcaux_device);
+	if (retval)
+		return retval;
+	retval = usb_register(&qcaux_driver);
+	if (retval)
+		usb_serial_deregister(&qcaux_device);
+	return retval;
+}
+
+static void __exit qcaux_exit(void)
+{
+	usb_deregister(&qcaux_driver);
+	usb_serial_deregister(&qcaux_device);
+}
+
+module_init(qcaux_init);
+module_exit(qcaux_exit);
 MODULE_LICENSE("GPL");

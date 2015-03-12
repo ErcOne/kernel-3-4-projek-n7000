@@ -14,11 +14,25 @@
 #include <linux/i2c.h>
 #include <linux/backlight.h>
 #include <linux/err.h>
-#include <linux/lp855x.h>
+#include <linux/delay.h>
+#include <linux/gpio.h>
+#include <linux/platform_data/lp855x.h>
+#ifdef CONFIG_HAS_EARLYSUSPEND
+#include <linux/earlysuspend.h>
+#endif
 
 /* Registers */
-#define BRIGHTNESS_CTRL		(0x00)
-#define DEVICE_CTRL		(0x01)
+#define BRIGHTNESS_CTRL		0x00
+#define DEVICE_CTRL		0x01
+#define EEPROM_START		0xA0
+#define EEPROM_END		0xA7
+#define EPROM_START		0xA0
+#define EPROM_END		0xAF
+
+#if defined(CONFIG_MACH_KONA)
+#define EEPROM_CFG3	0xA3
+#define EEPROM_CFG5	0xA5
+#endif
 
 #define BUF_SIZE		20
 #define DEFAULT_BL_NAME		"lcd-backlight"
@@ -32,6 +46,10 @@ struct lp855x {
 	struct device *dev;
 	struct mutex xfer_lock;
 	struct lp855x_platform_data *pdata;
+	int enabled;
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	struct early_suspend early_suspend;
+#endif
 };
 
 static int lp855x_read_byte(struct lp855x *lp, u8 reg, u8 *data)
@@ -87,7 +105,7 @@ static bool lp855x_is_valid_rom_area(struct lp855x *lp, u8 addr)
 
 static int lp855x_init_registers(struct lp855x *lp)
 {
-	u8 val, addr;
+	u8 val, addr, mask;
 	int i, ret;
 	struct lp855x_platform_data *pd = lp->pdata;
 
@@ -105,8 +123,18 @@ static int lp855x_init_registers(struct lp855x *lp)
 		for (i = 0; i < pd->size_program; i++) {
 			addr = pd->rom_data[i].addr;
 			val = pd->rom_data[i].val;
+			mask = pd->rom_data[i].mask;
 			if (!lp855x_is_valid_rom_area(lp, addr))
 				continue;
+
+			if (mask) {
+				u8 reg_val;
+
+				ret = lp855x_read_byte(lp, addr, &reg_val);
+				if (ret)
+					return ret;
+				val = (val & ~mask) | (reg_val & mask);
+			}
 
 			ret = lp855x_write_byte(lp, addr, val);
 			if (ret)
@@ -121,6 +149,7 @@ static int lp855x_bl_update_status(struct backlight_device *bl)
 {
 	struct lp855x *lp = bl_get_data(bl);
 	enum lp855x_brightness_ctrl_mode mode = lp->pdata->mode;
+	int ret;
 
 	if (bl->props.state & BL_CORE_SUSPENDED)
 		bl->props.brightness = 0;
@@ -135,7 +164,9 @@ static int lp855x_bl_update_status(struct backlight_device *bl)
 
 	} else if (mode == REGISTER_BASED) {
 		u8 val = bl->props.brightness;
-		lp855x_write_byte(lp, BRIGHTNESS_CTRL, val);
+		ret = lp855x_write_byte(lp, BRIGHTNESS_CTRL, val);
+		if (ret)
+			return ret;
 	}
 
 	return 0;
@@ -235,6 +266,84 @@ static const struct attribute_group lp855x_attr_group = {
 	.attrs = lp855x_attributes,
 };
 
+static int lp855x_set_power(struct lp855x *lp, int on)
+{
+	unsigned long on_udelay = lp->pdata->power_on_udelay;
+
+	pr_info("%s : %d\n", __func__, on);
+
+	if (on) {
+		int ret = 0;
+
+		gpio_set_value(lp->pdata->gpio_en, GPIO_LEVEL_HIGH);
+		usleep_range(on_udelay, on_udelay);
+
+		ret = lp855x_init_registers(lp);
+		if (ret)
+			return ret;
+	} else {
+		gpio_set_value(lp->pdata->gpio_en, GPIO_LEVEL_LOW);
+	}
+
+	lp->enabled = on;
+
+	return 0;
+}
+
+#if defined(CONFIG_MACH_KONA)
+static int lp855x_config(struct lp855x *lp)
+{
+	u8 val;
+	int ret;
+
+	/* DEVICE CONTROL: No FAST bit to prevent LP8556 register reset */
+	ret = lp855x_write_byte(lp, DEVICE_CTRL, 0x81);
+	if (ret)
+		return ret;
+
+	/* CFG3: SCURVE_EN is linear transitions, SLOPE = 200ms,
+	 * FILTER = heavy smoothing,
+	 * PWM_INPUT_HYSTERESIS = 1-bit hysteresis with 12-bit resolution
+	 */
+	ret = lp855x_write_byte(lp, EEPROM_CFG3, 0x5E);
+	if (ret)
+		return ret;
+
+	/* CFG5: No PWM_DIRECT, PS_MODE from platform data, PWM_FREQ = 9616Hz */
+	val = 0x2 << 4 | 0x04;
+	ret = lp855x_write_byte(lp, EEPROM_CFG5, val);
+
+	if (ret)
+		return ret;
+
+	return 0;
+
+}
+#endif
+
+#ifdef CONFIG_HAS_EARLYSUSPEND
+static void lp855x_early_suspend(struct early_suspend *h)
+{
+	struct lp855x *lp =
+		container_of(h, struct lp855x, early_suspend);
+
+	lp855x_set_power(lp, 0);
+}
+
+static void lp855x_late_resume(struct early_suspend *h)
+{
+	struct lp855x *lp =
+		container_of(h, struct lp855x, early_suspend);
+
+	lp855x_set_power(lp, 1);
+	backlight_update_status(lp->bl);
+#if defined(CONFIG_MACH_KONA)
+	lp855x_config(lp);
+#endif
+
+}
+#endif
+
 static int lp855x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 {
 	struct lp855x *lp;
@@ -271,6 +380,16 @@ static int lp855x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 			goto err_dev;
 	}
 
+	lp->enabled = 1;
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	if (lp->pdata->use_gpio_en) {
+		lp->early_suspend.level = EARLY_SUSPEND_LEVEL_DISABLE_FB - 2;
+		lp->early_suspend.suspend = lp855x_early_suspend;
+		lp->early_suspend.resume = lp855x_late_resume;
+		register_early_suspend(&lp->early_suspend);
+	}
+#endif
+
 	ret = lp855x_backlight_register(lp);
 	if (ret) {
 		dev_err(lp->dev,
@@ -285,6 +404,11 @@ static int lp855x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 	}
 
 	backlight_update_status(lp->bl);
+
+#if defined(CONFIG_MACH_KONA)
+	lp855x_config(lp);
+#endif
+
 	return 0;
 
 err_sysfs:
@@ -324,7 +448,18 @@ static struct i2c_driver lp855x_driver = {
 	.id_table = lp855x_ids,
 };
 
-module_i2c_driver(lp855x_driver);
+static int __init lp855x_init(void)
+{
+	return i2c_add_driver(&lp855x_driver);
+}
+
+static void __exit lp855x_exit(void)
+{
+	i2c_del_driver(&lp855x_driver);
+}
+
+module_init(lp855x_init);
+module_exit(lp855x_exit);
 
 MODULE_DESCRIPTION("Texas Instruments LP855x Backlight driver");
 MODULE_AUTHOR("Milo Kim <milo.kim@ti.com>");

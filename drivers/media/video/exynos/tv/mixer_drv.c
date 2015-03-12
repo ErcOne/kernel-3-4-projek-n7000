@@ -22,12 +22,11 @@
 #include <linux/pm_runtime.h>
 #include <linux/clk.h>
 #include <linux/kernel.h>
+#include <linux/videodev2_exynos_media.h>
+#include <mach/dev.h>
 
-#include <mach/exynos5_bus.h>
 #include <mach/videonode-exynos5.h>
 #include <media/exynos_mc.h>
-
-#include <plat/bts.h>
 
 MODULE_AUTHOR("Tomasz Stanislawski, <t.stanislaws@samsung.com>");
 MODULE_DESCRIPTION("Samsung MIXER");
@@ -92,10 +91,9 @@ static void mxr_set_alpha_blend(struct mxr_device *mdev)
 	}
 }
 
-static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
+static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev* sd)
 {
-	int i;
-	int ret = 0;
+	int i, ret;
 	int local = 1;
 	struct sub_mxr_device *sub_mxr;
 	struct mxr_layer *layer;
@@ -104,13 +102,18 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 #if defined(CONFIG_CPU_EXYNOS4210)
 	struct mxr_resources *res = &mdev->res;
 #endif
-	struct v4l2_control ctrl;
 
 	mutex_lock(&mdev->s_mutex);
 	++mdev->n_streamer;
 	mxr_dbg(mdev, "%s(%d)\n", __func__, mdev->n_streamer);
 	/* If pipeline is started from Gscaler input video device,
 	 * TV basic configuration must be set before running mixer */
+
+#if defined(CONFIG_BUSFREQ_OPP)
+	/* add bus device ptr for using bus frequency with opp */
+	mdev->bus_dev = dev_get("exynos-busfreq");
+#endif
+
 	if (mdev->mxr_data_from == FROM_GSC_SD) {
 		mxr_dbg(mdev, "%s: from gscaler\n", __func__);
 		local = 0;
@@ -118,8 +121,7 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 		ret = mxr_power_get(mdev);
 		if (ret) {
 			mxr_err(mdev, "power on failed\n");
-			ret = -ENODEV;
-			goto out;
+			return -ENODEV;
 		}
 		/* turn on connected output device through link
 		 * with mixer */
@@ -131,8 +133,7 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 				layer = sub_mxr->layer[MXR_LAYER_VIDEO];
 				layer->pipe.state = MXR_PIPELINE_STREAMING;
 				mxr_layer_geo_fix(layer);
-				layer->ops.format_set(layer, layer->fmt,
-							    &layer->geo);
+				layer->ops.format_set(layer);
 				layer->ops.stream_set(layer, 1);
 				local += sub_mxr->local;
 			}
@@ -141,14 +142,12 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 			mxr_layer_sync(mdev, MXR_ENABLE);
 
 		/* Set the TVOUT register about gsc-mixer local path */
-		mxr_reg_local_path_set(mdev, mdev->mxr0_gsc, mdev->mxr1_gsc,
-				mdev->flags);
+		mxr_reg_local_path_set(mdev, mdev->mxr0_gsc, mdev->mxr1_gsc, mdev->flags);
 	}
 
 	/* Alpha blending configuration always can be changed
 	 * whenever streaming */
 	mxr_set_alpha_blend(mdev);
-	mxr_reg_set_color_range(mdev);
 	mxr_reg_set_layer_prio(mdev);
 
 	if ((mdev->n_streamer == 1 && local == 1) ||
@@ -163,16 +162,19 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 						== MEDIA_ENT_T_V4L2_SUBDEV)
 					break;
 
-			if (i == MXR_PAD_SOURCE_GRP1) {
-				ret = -ENODEV;
-				goto out;
-			}
+			if (i == MXR_PAD_SOURCE_GRP1)
+				return -ENODEV;
 		}
 
 		sd = media_entity_to_v4l2_subdev(pad->entity);
 
 		mxr_dbg(mdev, "cookie of current output = (%d)\n",
 			to_output(mdev)->cookie);
+
+#if defined(CONFIG_BUSFREQ_OPP)
+		/* Request min 200MHz */
+		dev_lock(mdev->bus_dev, mdev->dev, INT_LOCK_TV);
+#endif
 
 #if defined(CONFIG_CPU_EXYNOS4210)
 		if (to_output(mdev)->cookie == 0)
@@ -186,22 +188,15 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 		if (ret) {
 			mxr_err(mdev, "failed to get mbus_fmt for output %s\n",
 					sd->name);
-			goto out;
-		}
-		ctrl.id = V4L2_CID_TV_GET_DVI_MODE;
-		ret = v4l2_subdev_call(sd, core, g_ctrl, &ctrl);
-		if (ret) {
-			mxr_err(mdev, "failed to get DVI or HDMI mode %s\n",
-					sd->name);
-			goto out;
+			return ret;
 		}
 
-		mxr_reg_set_mbus_fmt(mdev, &mbus_fmt, ctrl.value);
+		mxr_reg_set_mbus_fmt(mdev, &mbus_fmt);
 		ret = v4l2_subdev_call(sd, video, s_mbus_fmt, &mbus_fmt);
 		if (ret) {
 			mxr_err(mdev, "failed to set mbus_fmt for output %s\n",
 					sd->name);
-			goto out;
+			return ret;
 		}
 		mxr_reg_streamon(mdev);
 
@@ -209,28 +204,26 @@ static int mxr_streamer_get(struct mxr_device *mdev, struct v4l2_subdev *sd)
 		if (ret) {
 			mxr_err(mdev, "starting stream failed for output %s\n",
 					sd->name);
-			goto out;
+			return ret;
 		}
 
-		ret = mxr_reg_wait4update(mdev);
+		ret = mxr_reg_wait4vsync(mdev);
 		if (ret) {
 			mxr_err(mdev, "failed to get vsync (%d) from output\n",
 					ret);
-			goto out;
+			return ret;
 		}
 	}
 
-out:
 	mutex_unlock(&mdev->s_mutex);
 	mxr_reg_dump(mdev);
 
-	return ret;
+	return 0;
 }
 
 static int mxr_streamer_put(struct mxr_device *mdev, struct v4l2_subdev *sd)
 {
-	int i;
-	int ret = 0;
+	int ret, i;
 	int local = 1;
 	struct media_pad *pad;
 	struct sub_mxr_device *sub_mxr;
@@ -248,8 +241,9 @@ static int mxr_streamer_put(struct mxr_device *mdev, struct v4l2_subdev *sd)
 		local = 0;
 		for (i = 0; i < MXR_MAX_SUB_MIXERS; ++i) {
 			sub_mxr = &mdev->sub_mxr[i];
-			if (sub_mxr->local)
+			if (sub_mxr->local) {
 				local += sub_mxr->local;
+			}
 		}
 		if (local == 2)
 			mxr_layer_sync(mdev, MXR_DISABLE);
@@ -267,21 +261,23 @@ static int mxr_streamer_put(struct mxr_device *mdev, struct v4l2_subdev *sd)
 						== MEDIA_ENT_T_V4L2_SUBDEV)
 					break;
 
-			if (i == MXR_PAD_SOURCE_GRP1) {
-				ret = -ENODEV;
-				goto out;
-			}
+			if (i == MXR_PAD_SOURCE_GRP1)
+				return -ENODEV;
 		}
 
 		hdmi_sd = media_entity_to_v4l2_subdev(pad->entity);
 
 		mxr_reg_streamoff(mdev);
+#if defined(CONFIG_BUSFREQ_OPP)
+		dev_unlock(mdev->bus_dev, mdev->dev);
+#endif
+
 		/* vsync applies Mixer setup */
-		ret = mxr_reg_wait4update(mdev);
+		ret = mxr_reg_wait4vsync(mdev);
 		if (ret) {
 			mxr_err(mdev, "failed to get vsync (%d) from output\n",
 					ret);
-			goto out;
+			return ret;
 		}
 	}
 	/* When using local path between gscaler and mixer, below stop sequence
@@ -305,7 +301,7 @@ static int mxr_streamer_put(struct mxr_device *mdev, struct v4l2_subdev *sd)
 		if (ret) {
 			mxr_err(mdev, "stopping stream failed for output %s\n",
 					hdmi_sd->name);
-			goto out;
+			return ret;
 		}
 	}
 	/* turn off connected output device through link
@@ -327,12 +323,10 @@ static int mxr_streamer_put(struct mxr_device *mdev, struct v4l2_subdev *sd)
 	}
 	WARN(mdev->n_streamer < 0, "negative number of streamers (%d)\n",
 		mdev->n_streamer);
-
-out:
 	mutex_unlock(&mdev->s_mutex);
 	mxr_reg_dump(mdev);
 
-	return ret;
+	return 0;
 }
 
 void mxr_output_get(struct mxr_device *mdev)
@@ -634,17 +628,6 @@ static int mxr_runtime_resume(struct device *dev)
 #if defined(CONFIG_CPU_EXYNOS4210)
 	clk_enable(res->sclk_mixer);
 #endif
-
-	mdev->mif_handle = exynos5_bus_mif_min(800000);
-	if (!mdev->mif_handle)
-		dev_err(dev, "failed to request min_freq for mif\n");
-
-	mdev->int_handle = exynos5_bus_int_min(266000);
-	if (!mdev->int_handle)
-		dev_err(dev, "failed to request min_freq for int\n");
-
-	bts_change_threshold(BTS_MIXER_BW);
-
 	/* enable system mmu for tv. It must be enabled after enabling
 	 * mixer's clock. Because of system mmu limitation. */
 	mdev->vb2->resume(mdev->alloc_ctx);
@@ -665,19 +648,6 @@ static int mxr_runtime_suspend(struct device *dev)
 	/* disable system mmu for tv. It must be disabled before disabling
 	 * mixer's clock. Because of system mmu limitation. */
 	mdev->vb2->suspend(mdev->alloc_ctx);
-
-	bts_change_threshold(BTS_INCREASE_BW);
-
-	if (mdev->int_handle) {
-		exynos5_bus_int_put(mdev->int_handle);
-		mdev->int_handle = NULL;
-	}
-
-	if (mdev->mif_handle) {
-		exynos5_bus_mif_put(mdev->mif_handle);
-		mdev->mif_handle = NULL;
-	}
-
 	/* turn clocks off */
 #if defined(CONFIG_CPU_EXYNOS4210)
 	clk_disable(res->sclk_mixer);
@@ -1107,7 +1077,7 @@ static int mxr_link_setup(struct media_entity *entity,
 	int gsc_num = 0;
 
 	/* difficult to get dev ptr */
-	printk(KERN_DEBUG "%s start\n", __func__);
+	printk(KERN_DEBUG "%s %s\n", __func__, flags ? "start" : "stop");
 
 	if (flags & MEDIA_LNK_FL_ENABLED) {
 		sub_mxr->use = 1;
@@ -1394,7 +1364,6 @@ static int __devinit mxr_probe(struct platform_device *pdev)
 
 	/* setup pointer to master device */
 	mdev->dev = dev;
-	mdev->color_range = 3;
 
 	/* use only sub mixer0 as default */
 	mdev->sub_mxr[MXR_SUB_MIXER0].use = 1;
@@ -1409,14 +1378,7 @@ static int __devinit mxr_probe(struct platform_device *pdev)
 	mutex_init(&mdev->mutex);
 	mutex_init(&mdev->s_mutex);
 	spin_lock_init(&mdev->reg_slock);
-	init_waitqueue_head(&mdev->vsync_wait);
-
-	mdev->update_wq = create_singlethread_workqueue("hdmi-mixer");
-	if (mdev->update_wq == NULL) {
-		ret = -ENOMEM;
-		mxr_err(mdev, "failed to create work queue\n");
-		goto fail_mem;
-	}
+	init_waitqueue_head(&mdev->event_queue);
 
 	/* acquire resources: regs, irqs, clocks, regulators */
 	ret = mxr_acquire_resources(mdev, pdev);
@@ -1450,8 +1412,6 @@ static int __devinit mxr_probe(struct platform_device *pdev)
 
 	mxr_entities_info_print(mdev);
 
-	mxr_debugfs_init(mdev);
-
 	mxr_info(mdev, "probe successful\n");
 	return 0;
 
@@ -1465,8 +1425,6 @@ fail_resources:
 	mxr_release_resources(mdev);
 
 fail_mem:
-	if (mdev->update_wq)
-		destroy_workqueue(mdev->update_wq);
 	kfree(mdev);
 
 fail:
@@ -1481,13 +1439,9 @@ static int __devexit mxr_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(dev);
 
-	destroy_workqueue(mdev->update_wq);
 	mxr_release_layers(mdev);
 	mxr_release_video(mdev);
 	mxr_release_resources(mdev);
-
-	if (mdev->mif_handle)
-		exynos5_bus_mif_put(mdev->mif_handle);
 
 	kfree(mdev);
 
