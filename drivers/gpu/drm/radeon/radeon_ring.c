@@ -133,6 +133,7 @@ retry:
 				(*ib)->gpu_addr += (*ib)->sa_bo.offset;
 				(*ib)->fence = fence;
 				(*ib)->vm_id = 0;
+				(*ib)->is_const_ib = false;
 				/* ib are most likely to be allocated in a ring fashion
 				 * thus rdev->ib_pool.head_id should be the id of the
 				 * oldest ib
@@ -310,6 +311,9 @@ int radeon_ring_alloc(struct radeon_device *rdev, struct radeon_ring *ring, unsi
 {
 	int r;
 
+	/* make sure we aren't trying to allocate more space than there is on the ring */
+	if (ndw > (ring->ring_size / 4))
+		return -ENOMEM;
 	/* Align requested size with padding so unlock_commit can
 	 * pad safely */
 	ndw = (ndw + ring->align_mask) & ~ring->align_mask;

@@ -52,6 +52,7 @@ struct evergreen_cs_track {
 	u32			cb_color_view[12];
 	u32			cb_color_pitch[12];
 	u32			cb_color_slice[12];
+	u32			cb_color_slice_idx[12];
 	u32			cb_color_attrib[12];
 	u32			cb_color_cmask_slice[8];/* unused */
 	u32			cb_color_fmask_slice[8];/* unused */
@@ -80,6 +81,9 @@ struct evergreen_cs_track {
 	bool			cb_dirty;
 	bool			db_dirty;
 	bool			streamout_dirty;
+	u32			htile_offset;
+	u32			htile_surface;
+	struct radeon_bo	*htile_bo;
 };
 
 static u32 evergreen_cs_get_aray_mode(u32 tiling_flags)
@@ -124,12 +128,14 @@ static void evergreen_cs_track_init(struct evergreen_cs_track *track)
 		track->cb_color_info[i] = 0;
 		track->cb_color_view[i] = 0xFFFFFFFF;
 		track->cb_color_pitch[i] = 0;
-		track->cb_color_slice[i] = 0;
+		track->cb_color_slice[i] = 0xfffffff;
+		track->cb_color_slice_idx[i] = 0;
 	}
 	track->cb_target_mask = 0xFFFFFFFF;
 	track->cb_shader_mask = 0xFFFFFFFF;
 	track->cb_dirty = true;
 
+	track->db_depth_slice = 0xffffffff;
 	track->db_depth_view = 0xFFFFC000;
 	track->db_depth_size = 0xFFFFFFFF;
 	track->db_depth_control = 0xFFFFFFFF;
@@ -144,6 +150,9 @@ static void evergreen_cs_track_init(struct evergreen_cs_track *track)
 	track->db_s_read_bo = NULL;
 	track->db_s_write_bo = NULL;
 	track->db_dirty = true;
+	track->htile_bo = NULL;
+	track->htile_offset = 0xFFFFFFFF;
+	track->htile_surface = 0;
 
 	for (i = 0; i < 4; i++) {
 		track->vgt_strmout_size[i] = 0;
@@ -244,10 +253,9 @@ static int evergreen_surface_check_2d(struct radeon_cs_parser *p,
 {
 	struct evergreen_cs_track *track = p->track;
 	unsigned palign, halign, tileb, slice_pt;
+	unsigned mtile_pr, mtile_ps, mtileb;
 
 	tileb = 64 * surf->bpe * surf->nsamples;
-	palign = track->group_size / (8 * surf->bpe * surf->nsamples);
-	palign = MAX(8, palign);
 	slice_pt = 1;
 	if (tileb > surf->tsplit) {
 		slice_pt = tileb / surf->tsplit;
@@ -256,7 +264,10 @@ static int evergreen_surface_check_2d(struct radeon_cs_parser *p,
 	/* macro tile width & height */
 	palign = (8 * surf->bankw * track->npipes) * surf->mtilea;
 	halign = (8 * surf->bankh * surf->nbanks) / surf->mtilea;
-	surf->layer_size = surf->nbx * surf->nby * surf->bpe * slice_pt;
+	mtileb = (palign / 8) * (halign / 8) * tileb;;
+	mtile_pr = surf->nbx / palign;
+	mtile_ps = (mtile_pr * surf->nby) / halign;
+	surf->layer_size = mtile_ps * mtileb * slice_pt;
 	surf->base_align = (palign / 8) * (halign / 8) * tileb;
 	surf->palign = palign;
 	surf->halign = halign;
@@ -428,6 +439,39 @@ static int evergreen_cs_track_validate_cb(struct radeon_cs_parser *p, unsigned i
 
 	offset += surf.layer_size * mslice;
 	if (offset > radeon_bo_size(track->cb_color_bo[id])) {
+		/* old ddx are broken they allocate bo with w*h*bpp but
+		 * program slice with ALIGN(h, 8), catch this and patch
+		 * command stream.
+		 */
+		if (!surf.mode) {
+			volatile u32 *ib = p->ib->ptr;
+			unsigned long tmp, nby, bsize, size, min = 0;
+
+			/* find the height the ddx wants */
+			if (surf.nby > 8) {
+				min = surf.nby - 8;
+			}
+			bsize = radeon_bo_size(track->cb_color_bo[id]);
+			tmp = track->cb_color_bo_offset[id] << 8;
+			for (nby = surf.nby; nby > min; nby--) {
+				size = nby * surf.nbx * surf.bpe * surf.nsamples;
+				if ((tmp + size * mslice) <= bsize) {
+					break;
+				}
+			}
+			if (nby > min) {
+				surf.nby = nby;
+				slice = ((nby * surf.nbx) / 64) - 1;
+				if (!evergreen_surface_check(p, &surf, "cb")) {
+					/* check if this one works */
+					tmp += surf.layer_size * mslice;
+					if (tmp <= bsize) {
+						ib[track->cb_color_slice_idx[id]] = slice;
+						goto old_ddx_ok;
+					}
+				}
+			}
+		}
 		dev_warn(p->dev, "%s:%d cb[%d] bo too small (layer size %d, "
 			 "offset %d, max layer %d, bo size %ld, slice %d)\n",
 			 __func__, __LINE__, id, surf.layer_size,
@@ -440,7 +484,64 @@ static int evergreen_cs_track_validate_cb(struct radeon_cs_parser *p, unsigned i
 			surf.tsplit, surf.mtilea);
 		return -EINVAL;
 	}
+old_ddx_ok:
 
+	return 0;
+}
+
+static int evergreen_cs_track_validate_htile(struct radeon_cs_parser *p,
+						unsigned nbx, unsigned nby)
+{
+	struct evergreen_cs_track *track = p->track;
+	unsigned long size;
+
+	if (track->htile_bo == NULL) {
+		dev_warn(p->dev, "%s:%d htile enabled without htile surface 0x%08x\n",
+				__func__, __LINE__, track->db_z_info);
+		return -EINVAL;
+	}
+
+	if (G_028ABC_LINEAR(track->htile_surface)) {
+		/* pitch must be 16 htiles aligned == 16 * 8 pixel aligned */
+		nbx = round_up(nbx, 16 * 8);
+		/* height is npipes htiles aligned == npipes * 8 pixel aligned */
+		nby = round_up(nby, track->npipes * 8);
+	} else {
+		switch (track->npipes) {
+		case 8:
+			nbx = round_up(nbx, 64 * 8);
+			nby = round_up(nby, 64 * 8);
+			break;
+		case 4:
+			nbx = round_up(nbx, 64 * 8);
+			nby = round_up(nby, 32 * 8);
+			break;
+		case 2:
+			nbx = round_up(nbx, 32 * 8);
+			nby = round_up(nby, 32 * 8);
+			break;
+		case 1:
+			nbx = round_up(nbx, 32 * 8);
+			nby = round_up(nby, 16 * 8);
+			break;
+		default:
+			dev_warn(p->dev, "%s:%d invalid num pipes %d\n",
+					__func__, __LINE__, track->npipes);
+			return -EINVAL;
+		}
+	}
+	/* compute number of htile */
+	nbx = nbx / 8;
+	nby = nby / 8;
+	size = nbx * nby * 4;
+	size += track->htile_offset;
+
+	if (size > radeon_bo_size(track->htile_bo)) {
+		dev_warn(p->dev, "%s:%d htile surface too small %ld for %ld (%d %d)\n",
+				__func__, __LINE__, radeon_bo_size(track->htile_bo),
+				size, nbx, nby);
+		return -EINVAL;
+	}
 	return 0;
 }
 
@@ -530,6 +631,14 @@ static int evergreen_cs_track_validate_stencil(struct radeon_cs_parser *p)
 		return -EINVAL;
 	}
 
+	/* hyperz */
+	if (G_028040_TILE_SURFACE_ENABLE(track->db_z_info)) {
+		r = evergreen_cs_track_validate_htile(p, surf.nbx, surf.nby);
+		if (r) {
+			return r;
+		}
+	}
+
 	return 0;
 }
 
@@ -615,6 +724,14 @@ static int evergreen_cs_track_validate_depth(struct radeon_cs_parser *p)
 			(unsigned long)track->db_z_write_offset << 8, mslice,
 			radeon_bo_size(track->db_z_write_bo));
 		return -EINVAL;
+	}
+
+	/* hyperz */
+	if (G_028040_TILE_SURFACE_ENABLE(track->db_z_info)) {
+		r = evergreen_cs_track_validate_htile(p, surf.nbx, surf.nby);
+		if (r) {
+			return r;
+		}
 	}
 
 	return 0;
@@ -850,7 +967,7 @@ static int evergreen_cs_track_check(struct radeon_cs_parser *p)
 				return r;
 		}
 		/* Check depth buffer */
-		if (G_028800_Z_WRITE_ENABLE(track->db_depth_control)) {
+		if (G_028800_Z_ENABLE(track->db_depth_control)) {
 			r = evergreen_cs_track_validate_depth(p);
 			if (r)
 				return r;
@@ -1454,6 +1571,7 @@ static int evergreen_cs_check_reg(struct radeon_cs_parser *p, u32 reg, u32 idx)
 	case CB_COLOR7_SLICE:
 		tmp = (reg - CB_COLOR0_SLICE) / 0x3c;
 		track->cb_color_slice[tmp] = radeon_get_ib_value(p, idx);
+		track->cb_color_slice_idx[tmp] = idx;
 		track->cb_dirty = true;
 		break;
 	case CB_COLOR8_SLICE:
@@ -1462,6 +1580,7 @@ static int evergreen_cs_check_reg(struct radeon_cs_parser *p, u32 reg, u32 idx)
 	case CB_COLOR11_SLICE:
 		tmp = ((reg - CB_COLOR8_SLICE) / 0x1c) + 8;
 		track->cb_color_slice[tmp] = radeon_get_ib_value(p, idx);
+		track->cb_color_slice_idx[tmp] = idx;
 		track->cb_dirty = true;
 		break;
 	case CB_COLOR0_ATTRIB:
@@ -1616,6 +1735,23 @@ static int evergreen_cs_check_reg(struct radeon_cs_parser *p, u32 reg, u32 idx)
 		track->cb_color_bo[tmp] = reloc->robj;
 		track->cb_dirty = true;
 		break;
+	case DB_HTILE_DATA_BASE:
+		r = evergreen_cs_packet_next_reloc(p, &reloc);
+		if (r) {
+			dev_warn(p->dev, "bad SET_CONTEXT_REG "
+					"0x%04X\n", reg);
+			return -EINVAL;
+		}
+		track->htile_offset = radeon_get_ib_value(p, idx);
+		ib[idx] += (u32)((reloc->lobj.gpu_offset >> 8) & 0xffffffff);
+		track->htile_bo = reloc->robj;
+		track->db_dirty = true;
+		break;
+	case DB_HTILE_SURFACE:
+		/* 8x8 only */
+		track->htile_surface = radeon_get_ib_value(p, idx);
+		track->db_dirty = true;
+		break;
 	case CB_IMMED0_BASE:
 	case CB_IMMED1_BASE:
 	case CB_IMMED2_BASE:
@@ -1628,7 +1764,6 @@ static int evergreen_cs_check_reg(struct radeon_cs_parser *p, u32 reg, u32 idx)
 	case CB_IMMED9_BASE:
 	case CB_IMMED10_BASE:
 	case CB_IMMED11_BASE:
-	case DB_HTILE_DATA_BASE:
 	case SQ_PGM_START_FS:
 	case SQ_PGM_START_ES:
 	case SQ_PGM_START_VS:
@@ -2535,7 +2670,11 @@ static bool evergreen_vm_reg_valid(u32 reg)
 
 	/* check config regs */
 	switch (reg) {
+	case WAIT_UNTIL:
 	case GRBM_GFX_INDEX:
+	case CP_STRMOUT_CNTL:
+	case CP_COHER_CNTL:
+	case CP_COHER_SIZE:
 	case VGT_VTX_VECT_EJECT_REG:
 	case VGT_CACHE_INVALIDATION:
 	case VGT_GS_VERTEX_REUSE:
@@ -2640,6 +2779,7 @@ static bool evergreen_vm_reg_valid(u32 reg)
 	case CAYMAN_SQ_EX_ALLOC_TABLE_SLOTS:
 		return true;
 	default:
+		DRM_ERROR("Invalid register 0x%x in CS\n", reg);
 		return false;
 	}
 }

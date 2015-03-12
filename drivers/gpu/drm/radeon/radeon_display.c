@@ -533,7 +533,7 @@ static void radeon_crtc_init(struct drm_device *dev, int index)
 		radeon_legacy_init_crtc(dev, radeon_crtc);
 }
 
-static const char *encoder_names[36] = {
+static const char *encoder_names[37] = {
 	"NONE",
 	"INTERNAL_LVDS",
 	"INTERNAL_TMDS1",
@@ -570,6 +570,7 @@ static const char *encoder_names[36] = {
 	"INTERNAL_UNIPHY2",
 	"NUTMEG",
 	"TRAVIS",
+	"INTERNAL_VCE"
 };
 
 static const char *connector_names[15] = {
@@ -712,10 +713,15 @@ int radeon_ddc_get_modes(struct radeon_connector *radeon_connector)
 	if (radeon_connector->router.ddc_valid)
 		radeon_router_select_ddc_port(radeon_connector);
 
-	if ((radeon_connector->base.connector_type == DRM_MODE_CONNECTOR_DisplayPort) ||
-	    (radeon_connector->base.connector_type == DRM_MODE_CONNECTOR_eDP) ||
-	    (radeon_connector_encoder_get_dp_bridge_encoder_id(&radeon_connector->base) !=
-	     ENCODER_OBJECT_ID_NONE)) {
+	if (radeon_connector_encoder_get_dp_bridge_encoder_id(&radeon_connector->base) !=
+	    ENCODER_OBJECT_ID_NONE) {
+		struct radeon_connector_atom_dig *dig = radeon_connector->con_priv;
+
+		if (dig->dp_i2c_bus)
+			radeon_connector->edid = drm_get_edid(&radeon_connector->base,
+							      &dig->dp_i2c_bus->adapter);
+	} else if ((radeon_connector->base.connector_type == DRM_MODE_CONNECTOR_DisplayPort) ||
+		   (radeon_connector->base.connector_type == DRM_MODE_CONNECTOR_eDP)) {
 		struct radeon_connector_atom_dig *dig = radeon_connector->con_priv;
 
 		if ((dig->dp_sink_type == CONNECTOR_OBJECT_ID_DISPLAYPORT ||
@@ -1132,7 +1138,7 @@ radeon_user_framebuffer_create(struct drm_device *dev,
 	if (ret) {
 		kfree(radeon_fb);
 		drm_gem_object_unreference_unlocked(obj);
-		return NULL;
+		return ERR_PTR(ret);
 	}
 
 	return &radeon_fb->base;
@@ -1298,7 +1304,7 @@ int radeon_modeset_init(struct radeon_device *rdev)
 	/* init dig PHYs, disp eng pll */
 	if (rdev->is_atom_bios) {
 		radeon_atom_encoder_init(rdev);
-		radeon_atom_dcpll_init(rdev);
+		radeon_atom_disp_eng_pll_init(rdev);
 	}
 
 	/* initialize hpd */

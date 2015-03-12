@@ -40,7 +40,7 @@
 /*
  * Allow hardware encryption to be disabled.
  */
-static int modparam_nohwcrypt;
+static bool modparam_nohwcrypt;
 module_param_named(nohwcrypt, modparam_nohwcrypt, bool, S_IRUGO);
 MODULE_PARM_DESC(nohwcrypt, "Disable hardware encryption.");
 
@@ -2167,7 +2167,8 @@ static int rt73usb_probe_hw_mode(struct rt2x00_dev *rt2x00dev)
 		tx_power = rt2x00_eeprom_addr(rt2x00dev, EEPROM_TXPOWER_A_START);
 		for (i = 14; i < spec->num_channels; i++) {
 			info[i].max_power = MAX_TXPOWER;
-			info[i].default_power1 = TXPOWER_FROM_DEV(tx_power[i]);
+			info[i].default_power1 =
+					TXPOWER_FROM_DEV(tx_power[i - 14]);
 		}
 	}
 
@@ -2231,7 +2232,8 @@ static int rt73usb_probe_hw(struct rt2x00_dev *rt2x00dev)
 /*
  * IEEE80211 stack callback functions.
  */
-static int rt73usb_conf_tx(struct ieee80211_hw *hw, u16 queue_idx,
+static int rt73usb_conf_tx(struct ieee80211_hw *hw,
+			   struct ieee80211_vif *vif, u16 queue_idx,
 			   const struct ieee80211_tx_queue_params *params)
 {
 	struct rt2x00_dev *rt2x00dev = hw->priv;
@@ -2247,7 +2249,7 @@ static int rt73usb_conf_tx(struct ieee80211_hw *hw, u16 queue_idx,
 	 * we are free to update the registers based on the value
 	 * in the queue parameter.
 	 */
-	retval = rt2x00mac_conf_tx(hw, queue_idx, params);
+	retval = rt2x00mac_conf_tx(hw, vif, queue_idx, params);
 	if (retval)
 		return retval;
 
@@ -2288,7 +2290,7 @@ static int rt73usb_conf_tx(struct ieee80211_hw *hw, u16 queue_idx,
 	return 0;
 }
 
-static u64 rt73usb_get_tsf(struct ieee80211_hw *hw)
+static u64 rt73usb_get_tsf(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 {
 	struct rt2x00_dev *rt2x00dev = hw->priv;
 	u64 tsf;
@@ -2323,6 +2325,7 @@ static const struct ieee80211_ops rt73usb_mac80211_ops = {
 	.set_antenna		= rt2x00mac_set_antenna,
 	.get_antenna		= rt2x00mac_get_antenna,
 	.get_ringparam		= rt2x00mac_get_ringparam,
+	.tx_frames_pending	= rt2x00mac_tx_frames_pending,
 };
 
 static const struct rt2x00lib_ops rt73usb_rt2x00_ops = {
@@ -2428,6 +2431,7 @@ static struct usb_device_id rt73usb_device_table[] = {
 	/* Buffalo */
 	{ USB_DEVICE(0x0411, 0x00d8) },
 	{ USB_DEVICE(0x0411, 0x00d9) },
+	{ USB_DEVICE(0x0411, 0x00e6) },
 	{ USB_DEVICE(0x0411, 0x00f4) },
 	{ USB_DEVICE(0x0411, 0x0116) },
 	{ USB_DEVICE(0x0411, 0x0119) },
@@ -2534,15 +2538,4 @@ static struct usb_driver rt73usb_driver = {
 	.resume		= rt2x00usb_resume,
 };
 
-static int __init rt73usb_init(void)
-{
-	return usb_register(&rt73usb_driver);
-}
-
-static void __exit rt73usb_exit(void)
-{
-	usb_deregister(&rt73usb_driver);
-}
-
-module_init(rt73usb_init);
-module_exit(rt73usb_exit);
+module_usb_driver(rt73usb_driver);

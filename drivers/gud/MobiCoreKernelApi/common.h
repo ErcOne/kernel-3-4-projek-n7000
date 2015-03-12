@@ -2,16 +2,20 @@
  *
  * Common data types
  *
- * <!-- Copyright Giesecke & Devrient GmbH 2009 - 2011 -->
+ * <!-- Copyright Giesecke & Devrient GmbH 2009 - 2012 -->
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #ifndef COMMON_H
 #define COMMON_H
 
 #include "connection.h"
-#include "mci.h"
+#include "mcinq.h"
 
 void mcapi_insert_connection(
-	connection_t *connection
+	struct connection *connection
 );
 
 void mcapi_remove_connection(
@@ -27,7 +31,7 @@ unsigned int mcapi_unique_id(
 #define MC_DRV_MOD_DEVNODE_FULLPATH "/dev/mobicore"
 
 /* dummy function helper macro. */
-#define DUMMY_FUNCTION()    do {} while (0)
+#define DUMMY_FUNCTION()	do {} while (0)
 
 #define MCDRV_ERROR(txt, ...) \
 	printk(KERN_ERR "mcKernelApi %s() ### ERROR: " txt, \
@@ -38,9 +42,9 @@ unsigned int mcapi_unique_id(
 
 /* #define DEBUG_VERBOSE */
 #if defined(DEBUG_VERBOSE)
-#define MCDRV_DBG_VERBOSE          MCDRV_DBG
+#define MCDRV_DBG_VERBOSE		  MCDRV_DBG
 #else
-#define MCDRV_DBG_VERBOSE(...)     DUMMY_FUNCTION()
+#define MCDRV_DBG_VERBOSE(...)	 DUMMY_FUNCTION()
 #endif
 
 #define MCDRV_DBG(txt, ...) \

@@ -72,83 +72,62 @@ void s5p_dp_lane_swap(struct s5p_dp_device *dp, bool enable)
 	writel(reg, dp->reg_base + S5P_DP_LANE_MAP);
 }
 
-/*
- * FIXME: Mask this function to fix compile error,
- *        LSI patch will be released for this error.
- */
-#if 0
 void s5p_dp_init_analog_param(struct s5p_dp_device *dp)
 {
 	u32 reg;
+	struct s5p_dp_platdata *pdata = dp->dev->platform_data;
+	struct analog_param *analog_param = pdata->analog_param;
 
-	/*
-	 * Set termination
-	 * Normal bandgap, Normal swing, Tx terminal registor 61 ohm
-	 * 24M Phy clock, TX digital logic power is 100:1.0625V
-	 */
-	reg = SEL_BG_NEW_BANDGAP | TX_TERMINAL_CTRL_61_OHM |
-		SWING_A_30PER_G_NORMAL;
+	reg = TX_TERMINAL_CTRL_50_OHM;
 	writel(reg, dp->reg_base + S5P_DP_ANALOG_CTL_1);
+
 	reg = SEL_24M | TX_DVDD_BIT_1_0625V;
 	writel(reg, dp->reg_base + S5P_DP_ANALOG_CTL_2);
 
-	/*
-	 * Set power source for internal clk driver to 1.0625v.
-	 * Select current reference of TX driver current to 00:Ipp/2+Ic/2.
-	 * Set VCO range of PLL +- 0uA
-	 */
-	reg = DRIVE_DVDD_BIT_1_0625V | SEL_CURRENT_DEFAULT |
-		VCO_BIT_000_MICRO;
+	reg = DRIVE_DVDD_BIT_1_0625V | VCO_BIT_600_MICRO;
 	writel(reg, dp->reg_base + S5P_DP_ANALOG_CTL_3);
 
-	/*
-	 * Set AUX TX terminal resistor to 102 ohm
-	 * Set AUX channel amplitude control
-	*/
-	reg = PD_RING_OSC | AUX_TERMINAL_CTRL_102_OHM |
-		TX_CUR1_2X | TX_CUR_4_MA;
-	writel(reg, dp->reg_base + S5P_DP_PLL_FILTER_CTL_1);
+	if (!analog_param) {
+		reg = PD_RING_OSC | AUX_TERMINAL_CTRL_50_OHM |
+			TX_CUR1_2X | TX_CUR_16_MA;
+		writel(reg, dp->reg_base + S5P_DP_PLL_FILTER_CTL_1);
 
-	if (soc_is_exynos5250()) {
-		/* Output amplitude fine setting */
-		reg = CH3_AMP_0_MV | CH2_AMP_0_MV |
-			CH1_AMP_0_MV | CH0_AMP_0_MV;
-		writel(reg, dp->reg_base + S5P_DP_PLL_FILTER_CTL_2);
-
-		/*
-		 * PLL loop filter bandwidth
-		 * For 2.7Gbps: 175KHz, For 1.62Gbps: 234KHz
-		 * PLL digital power select: 1.2500V
-		 */
-		reg = DP_PLL_LOOP_BIT_DEFAULT | DP_PLL_REF_BIT_1_2500V;
-		writel(reg, dp->reg_base + S5P_DP_PLL_CTL);
+		reg = CH3_AMP_400_MV | CH2_AMP_400_MV |
+			CH1_AMP_400_MV | CH0_AMP_400_MV;
+		writel(reg, dp->reg_base + S5P_DP_TX_AMP_TUNING_CTL);
 	} else {
-		/* Output amplitude fine setting */
-		reg = CH1_AMP_0_MV | CH0_AMP_0_MV;
-		writel(reg, dp->reg_base + S5P_DP_PLL_FILTER_CTL_2);
+		int tx_amp;
 
-		/*
-		 * PLL loop filter bandwidth
-		 * For 2.7Gbps: 175KHz, For 1.62Gbps: 234KHz
-		 * PLL digital power select: 1.1250V
-		 */
-		reg = DP_PLL_LOOP_BIT_DEFAULT | DP_PLL_REF_BIT_1_1250V;
-		writel(reg, dp->reg_base + S5P_DP_PLL_CTL);
+		reg = PD_RING_OSC | TX_CUR1_2X | TX_CUR_16_MA;
+		switch (analog_param->aux_tx_terminal_resistor) {
+		case AUX_TX_37_5_OHM:
+			reg |= AUX_TERMINAL_CTRL_37_5_OHM;
+			break;
+		case AUX_TX_45_OHM:
+			reg |= AUX_TERMINAL_CTRL_45_OHM;
+			break;
+		case AUX_TX_50_OHM:
+			reg |= AUX_TERMINAL_CTRL_50_OHM;
+			break;
+		case AUX_TX_65_OHM:
+			reg |= AUX_TERMINAL_CTRL_65_OHM;
+			break;
+		}
+		writel(reg, dp->reg_base + S5P_DP_PLL_FILTER_CTL_1);
+
+		tx_amp = analog_param->tx_amplitude;
+		if (tx_amp < 200000 || tx_amp > 500000) {
+			dev_warn(dp->dev,
+				 "TX amp out of range, defaulting to 400mV\n");
+			tx_amp = 400000;
+		}
+
+		tx_amp = ((tx_amp - 400000) / 12500) & 0x1f;
+
+		reg = (tx_amp << CH3_AMP_SHIFT) | (tx_amp << CH2_AMP_SHIFT) |
+			(tx_amp << CH1_AMP_SHIFT) | (tx_amp << CH0_AMP_SHIFT);
+		writel(reg, dp->reg_base + S5P_DP_TX_AMP_TUNING_CTL);
 	}
-}
-#endif
-
-void s5p_dp_init_analog_param(struct s5p_dp_device *dp)
-{
-	writel(0x10, dp->reg_base + S5P_DP_ANALOG_CTL_1);
-
-	writel(0x0C, dp->reg_base + S5P_DP_ANALOG_CTL_2);
-
-	writel(0x85, dp->reg_base + S5P_DP_ANALOG_CTL_3);
-
-	writel(0x66, dp->reg_base + S5P_DP_PLL_FILTER_CTL_1);
-
-	writel(0x0, dp->reg_base + S5P_DP_TX_AMP_TUNING_CTL);
 }
 
 void s5p_dp_init_interrupt(struct s5p_dp_device *dp)
@@ -197,9 +176,6 @@ void s5p_dp_reset(struct s5p_dp_device *dp)
 
 	s5p_dp_lane_swap(dp, 0);
 
-	if (soc_is_exynos5250() && samsung_rev() < EXYNOS5250_REV_1_0)
-		writel(0x75, dp->reg_base + S5P_DP_PLL_FILTER_CTL_1);
-
 	writel(0x0, dp->reg_base + S5P_DP_SYS_CTL_1);
 	writel(0x40, dp->reg_base + S5P_DP_SYS_CTL_2);
 	writel(0x0, dp->reg_base + S5P_DP_SYS_CTL_3);
@@ -223,8 +199,7 @@ void s5p_dp_reset(struct s5p_dp_device *dp)
 
 	writel(0x00000101, dp->reg_base + S5P_DP_SOC_GENERAL_CTL);
 
-	if (soc_is_exynos5250() && samsung_rev() >= EXYNOS5250_REV_1_0)
-		s5p_dp_init_analog_param(dp);
+	s5p_dp_init_analog_param(dp);
 	s5p_dp_init_interrupt(dp);
 }
 
@@ -365,7 +340,6 @@ void s5p_dp_set_analog_power_down(struct s5p_dp_device *dp,
 void s5p_dp_init_analog_func(struct s5p_dp_device *dp)
 {
 	u32 reg;
-	int timeout_loop = 0;
 
 	s5p_dp_set_analog_power_down(dp, POWER_ALL, 0);
 
@@ -377,18 +351,8 @@ void s5p_dp_init_analog_func(struct s5p_dp_device *dp)
 	writel(reg, dp->reg_base + S5P_DP_DEBUG_CTL);
 
 	/* Power up PLL */
-	if (s5p_dp_get_pll_lock_status(dp) == PLL_UNLOCKED) {
+	if (s5p_dp_get_pll_lock_status(dp) == PLL_UNLOCKED)
 		s5p_dp_set_pll_power_down(dp, 0);
-
-		while (s5p_dp_get_pll_lock_status(dp) == PLL_UNLOCKED) {
-			timeout_loop++;
-			if (DP_TIMEOUT_LOOP_COUNT < timeout_loop) {
-				dev_err(dp->dev, "failed to get pll lock status\n");
-				return;
-			}
-			udelay(10);
-		}
-	}
 
 	/* Enable Serdes FIFO function and Link symbol clock domain module */
 	reg = readl(dp->reg_base + S5P_DP_FUNC_EN_2);
@@ -471,16 +435,37 @@ int s5p_dp_start_aux_transaction(struct s5p_dp_device *dp)
 {
 	int reg;
 	int retval = 0;
+	int timeout_loop = 0;
+	int aux_timeout = 0;
 
 	/* Enable AUX CH operation */
 	reg = readl(dp->reg_base + S5P_DP_AUX_CH_CTL_2);
 	reg |= AUX_EN;
 	writel(reg, dp->reg_base + S5P_DP_AUX_CH_CTL_2);
 
+	/* Is AUX CH operation enabled? */
+	reg = readl(dp->reg_base + S5P_DP_AUX_CH_CTL_2);
+	while (reg & AUX_EN) {
+		aux_timeout++;
+		if ((DP_TIMEOUT_LOOP_COUNT * 10) < aux_timeout) {
+			dev_err(dp->dev, "AUX CH enable timeout!\n");
+			return -ETIMEDOUT;
+		}
+		reg = readl(dp->reg_base + S5P_DP_AUX_CH_CTL_2);
+		udelay(100);
+	}
+
 	/* Is AUX CH command reply received? */
 	reg = readl(dp->reg_base + S5P_DP_INT_STA);
-	while (!(reg & RPLY_RECEIV))
+	while (!(reg & RPLY_RECEIV)) {
+		timeout_loop++;
+		if (DP_TIMEOUT_LOOP_COUNT < timeout_loop) {
+			dev_err(dp->dev, "AUX CH command reply failed!\n");
+			return -ETIMEDOUT;
+		}
 		reg = readl(dp->reg_base + S5P_DP_INT_STA);
+		udelay(10);
+	}
 
 	/* Clear interrupt source for AUX CH command reply */
 	writel(RPLY_RECEIV, dp->reg_base + S5P_DP_INT_STA);
@@ -488,13 +473,9 @@ int s5p_dp_start_aux_transaction(struct s5p_dp_device *dp)
 	/* Clear interrupt source for AUX CH access error */
 	reg = readl(dp->reg_base + S5P_DP_INT_STA);
 	if (reg & AUX_ERR) {
-		dev_err(dp->dev, "AUX CH error happens reg : %x\n", reg);
 		writel(AUX_ERR, dp->reg_base + S5P_DP_INT_STA);
 		return -EREMOTEIO;
 	}
-
-	reg = readl(dp->reg_base + S5P_DP_INT_STA);
-	dev_err(dp->dev, "INT_STA AUX Err Status Reg : %x\n", reg);
 
 	/* Check AUX CH error access status */
 	reg = readl(dp->reg_base + S5P_DP_AUX_CH_STA);
@@ -545,7 +526,7 @@ int s5p_dp_write_byte_to_dpcd(struct s5p_dp_device *dp,
 		if (retval == 0)
 			break;
 		else
-			dev_err(dp->dev, "Aux Transaction fail!\n");
+			dev_dbg(dp->dev, "Aux Transaction fail!\n");
 	}
 
 	return retval;
@@ -585,7 +566,7 @@ int s5p_dp_read_byte_from_dpcd(struct s5p_dp_device *dp,
 		if (retval == 0)
 			break;
 		else
-			dev_err(dp->dev, "Aux Transaction fail!\n");
+			dev_dbg(dp->dev, "Aux Transaction fail!\n");
 	}
 
 	/* Read data buffer */
@@ -649,7 +630,7 @@ int s5p_dp_write_bytes_to_dpcd(struct s5p_dp_device *dp,
 			if (retval == 0)
 				break;
 			else
-				dev_err(dp->dev, "Aux Transaction fail!\n");
+				dev_dbg(dp->dev, "Aux Transaction fail!\n");
 		}
 
 		start_offset += cur_data_count;
@@ -705,10 +686,8 @@ int s5p_dp_read_bytes_from_dpcd(struct s5p_dp_device *dp,
 			retval = s5p_dp_start_aux_transaction(dp);
 			if (retval == 0)
 				break;
-			else {
-				dev_err(dp->dev, "Aux Transaction fail!\n");
-				msleep(20);
-			}
+			else
+				dev_dbg(dp->dev, "Aux Transaction fail!\n");
 		}
 
 		for (cur_data_idx = 0; cur_data_idx < cur_data_count;
@@ -753,7 +732,7 @@ int s5p_dp_select_i2c_device(struct s5p_dp_device *dp,
 	/* Start AUX transaction */
 	retval = s5p_dp_start_aux_transaction(dp);
 	if (retval != 0)
-		dev_err(dp->dev, "Aux Transaction fail!\n");
+		dev_dbg(dp->dev, "Aux Transaction fail!\n");
 
 	return retval;
 }
@@ -793,7 +772,7 @@ int s5p_dp_read_byte_from_i2c(struct s5p_dp_device *dp,
 		if (retval == 0)
 			break;
 		else
-			dev_err(dp->dev, "Aux Transaction fail!\n");
+			dev_dbg(dp->dev, "Aux Transaction fail!\n");
 	}
 
 	/* Read data */
@@ -836,24 +815,24 @@ int s5p_dp_read_bytes_from_i2c(struct s5p_dp_device *dp,
 			else
 				defer = 0;
 
-			if (retval == 0) {
-				/*
-				 * Set I2C transaction and write data
-				 * If bit 3 is 1, DisplayPort transaction.
-				 * If Bit 3 is 0, I2C transaction.
-				 */
-				reg = AUX_LENGTH(16) |
-					AUX_TX_COMM_I2C_TRANSACTION |
-					AUX_TX_COMM_READ;
-				writel(reg, dp->reg_base + S5P_DP_AUX_CH_CTL_1);
+			/*
+			 * Set I2C transaction and write data
+			 * If bit 3 is 1, DisplayPort transaction.
+			 * If Bit 3 is 0, I2C transaction.
+			 */
+			reg = AUX_LENGTH(16) |
+				AUX_TX_COMM_I2C_TRANSACTION |
+				AUX_TX_COMM_READ;
+			writel(reg, dp->reg_base +
+				S5P_DP_AUX_CH_CTL_1);
 
-				/* Start AUX transaction */
-				retval = s5p_dp_start_aux_transaction(dp);
-				if (retval == 0)
-					break;
-				else
-					dev_err(dp->dev, "Aux Transaction fail!\n");
-			}
+			/* Start AUX transaction */
+			retval = s5p_dp_start_aux_transaction(dp);
+			if (retval == 0)
+				break;
+			else
+				dev_dbg(dp->dev, "Aux Transaction fail!\n");
+
 			/* Check if Rx sends defer */
 			reg = readl(dp->reg_base + S5P_DP_AUX_RX_COMM);
 			if (reg == AUX_RX_COMM_AUX_DEFER ||
@@ -986,7 +965,8 @@ void s5p_dp_set_lane3_pre_emphasis(struct s5p_dp_device *dp, u32 level)
 	writel(reg, dp->reg_base + S5P_DP_LN3_LINK_TRAINING_CTL);
 }
 
-void s5p_dp_set_lane0_link_training(struct s5p_dp_device *dp, u32 training_lane)
+void s5p_dp_set_lane0_link_training(struct s5p_dp_device *dp,
+					u32 training_lane)
 {
 	u32 reg;
 
@@ -994,7 +974,8 @@ void s5p_dp_set_lane0_link_training(struct s5p_dp_device *dp, u32 training_lane)
 	writel(reg, dp->reg_base + S5P_DP_LN0_LINK_TRAINING_CTL);
 }
 
-void s5p_dp_set_lane1_link_training(struct s5p_dp_device *dp, u32 training_lane)
+void s5p_dp_set_lane1_link_training(struct s5p_dp_device *dp,
+					u32 training_lane)
 {
 	u32 reg;
 
@@ -1002,7 +983,8 @@ void s5p_dp_set_lane1_link_training(struct s5p_dp_device *dp, u32 training_lane)
 	writel(reg, dp->reg_base + S5P_DP_LN1_LINK_TRAINING_CTL);
 }
 
-void s5p_dp_set_lane2_link_training(struct s5p_dp_device *dp, u32 training_lane)
+void s5p_dp_set_lane2_link_training(struct s5p_dp_device *dp,
+					u32 training_lane)
 {
 	u32 reg;
 
@@ -1010,7 +992,8 @@ void s5p_dp_set_lane2_link_training(struct s5p_dp_device *dp, u32 training_lane)
 	writel(reg, dp->reg_base + S5P_DP_LN2_LINK_TRAINING_CTL);
 }
 
-void s5p_dp_set_lane3_link_training(struct s5p_dp_device *dp, u32 training_lane)
+void s5p_dp_set_lane3_link_training(struct s5p_dp_device *dp,
+					u32 training_lane)
 {
 	u32 reg;
 
@@ -1068,30 +1051,6 @@ void s5p_dp_reset_macro(struct s5p_dp_device *dp)
 int s5p_dp_init_video(struct s5p_dp_device *dp)
 {
 	u32 reg;
-#if defined(CONFIG_MACH_P10_DP_01)
-
-	/* Clear VID_CLK_CHG[1] and VID_FORMAT_CHG[3] and VSYNC_DET[7] */
-	reg = VSYNC_DET | VID_FORMAT_CHG | VID_CLK_CHG;
-	writel(reg, dp->reg_base + S5P_DP_COMMON_INT_STA_1);
-
-	/* I_STRM__CLK detect : DE_CTL : Auto detect */
-	reg = 0x0;
-	writel(reg, dp->reg_base + S5P_DP_SYS_CTL_1);
-
-	/* I_STRM__CLK Freq Change Detect : clock Freq force change enable
-		=> Force clock not change , for protecting Display flicker */
-	reg = (0x4 << 4)|(0 << 1)|(1 << 0);
-	writel(reg, dp->reg_base + S5P_DP_VIDEO_CTL_2);
-
-	/* FIMD Video stream valid : Auto detect */
-	reg = 0x0;
-	writel(reg, dp->reg_base + S5P_DP_VIDEO_CTL_3);
-
-	/* Video VID_HRES_TH[7:4], VID_VRES_TH[3:0] */
-	reg = (0x2 << 4) | (0x0 << 0);
-	writel(reg, dp->reg_base + S5P_DP_VIDEO_CTL_8);
-
-#elif defined(CONFIG_MACH_P10_DP_00)
 
 	reg = VSYNC_DET | VID_FORMAT_CHG | VID_CLK_CHG;
 	writel(reg, dp->reg_base + S5P_DP_COMMON_INT_STA_1);
@@ -1104,8 +1063,6 @@ int s5p_dp_init_video(struct s5p_dp_device *dp)
 
 	reg = 0x0;
 	writel(reg, dp->reg_base + S5P_DP_SYS_CTL_3);
-
-#endif
 
 	reg = VID_HRES_TH(2) | VID_VRES_TH(0);
 	writel(reg, dp->reg_base + S5P_DP_VIDEO_CTL_8);
@@ -1140,42 +1097,6 @@ void s5p_dp_set_video_color_format(struct s5p_dp_device *dp,
 int s5p_dp_is_slave_video_stream_clock_on(struct s5p_dp_device *dp)
 {
 	u32 reg;
-#if defined(CONFIG_MACH_P10_DP_01)
-
-
-	/* Update Video stream clk detect status */
-	reg = readl(dp->reg_base + S5P_DP_SYS_CTL_1);
-	writel(reg, dp->reg_base + S5P_DP_SYS_CTL_1);
-
-	dev_dbg(dp->dev, "wait SYS_CTL_1.\n");
-
-
-	reg = readl(dp->reg_base + S5P_DP_SYS_CTL_1);
-
-	if (!(reg & DET_STA)) {
-		dev_dbg(dp->dev, "Input stream clock not detected.\n");
-		return -EINVAL;
-	}
-
-	/* To check whether input stream clock is stable. */
-	/* To do that clear it first. */
-	/* Update Video stream clk change status */
-	if (soc_is_exynos5250()) {
-		reg = readl(dp->reg_base + S5P_DP_SYS_CTL_2);
-		writel(reg, dp->reg_base + S5P_DP_SYS_CTL_2);
-	} else {
-		reg = readl(dp->reg_base + S5P_DP_SYS_CTL_2);
-		writel(reg, dp->reg_base + S5P_DP_SYS_CTL_2);
-
-		reg = readl(dp->reg_base + S5P_DP_SYS_CTL_2);
-		dev_dbg(dp->dev, "wait SYS_CTL_2.\n");
-
-		if (reg & CHA_STA) {
-			dev_dbg(dp->dev, "Input stream clk is changing\n");
-			return -EINVAL;
-		}
-	}
-#elif defined(CONFIG_MACH_P10_DP_00)
 
 	reg = readl(dp->reg_base + S5P_DP_SYS_CTL_1);
 	writel(reg, dp->reg_base + S5P_DP_SYS_CTL_1);
@@ -1197,7 +1118,7 @@ int s5p_dp_is_slave_video_stream_clock_on(struct s5p_dp_device *dp)
 		dev_dbg(dp->dev, "Input stream clk is changing\n");
 		return -EINVAL;
 	}
-#endif
+
 	return 0;
 }
 
@@ -1280,9 +1201,7 @@ void s5p_dp_start_video(struct s5p_dp_device *dp)
 int s5p_dp_is_video_stream_on(struct s5p_dp_device *dp)
 {
 	u32 reg;
-#if defined(CONFIG_MACH_P10_DP_01)
 
-	/* Update STRM_VALID */
 	reg = readl(dp->reg_base + S5P_DP_SYS_CTL_3);
 	writel(reg, dp->reg_base + S5P_DP_SYS_CTL_3);
 
@@ -1291,18 +1210,7 @@ int s5p_dp_is_video_stream_on(struct s5p_dp_device *dp)
 		dev_dbg(dp->dev, "Input video stream is not detected.\n");
 		return -EINVAL;
 	}
-#elif defined(CONFIG_MACH_P10_DP_00)
 
-	/* Update STRM_VALID */
-	reg = F_VALID | VALID_CTRL;
-	writel(reg, dp->reg_base + S5P_DP_SYS_CTL_3);
-
-	reg = readl(dp->reg_base + S5P_DP_SYS_CTL_3);
-	if (!(reg & STRM_VALID)) {
-		dev_dbg(dp->dev, "Input video stream is not detected.\n");
-		return -EINVAL;
-	}
-#endif
 	return 0;
 }
 

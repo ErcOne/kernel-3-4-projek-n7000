@@ -26,6 +26,9 @@
  *	YOSHIFUJI,H. @USAGI	Always remove fragment header to
  *				calculate ICV correctly.
  */
+
+#define pr_fmt(fmt) "IPv6: " fmt
+
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -42,6 +45,7 @@
 #include <linux/jhash.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 
 #include <net/sock.h>
 #include <net/snmp.h>
@@ -152,8 +156,8 @@ void ip6_frag_init(struct inet_frag_queue *q, void *a)
 
 	fq->id = arg->id;
 	fq->user = arg->user;
-	ipv6_addr_copy(&fq->saddr, arg->src);
-	ipv6_addr_copy(&fq->daddr, arg->dst);
+	fq->saddr = *arg->src;
+	fq->daddr = *arg->dst;
 }
 EXPORT_SYMBOL(ip6_frag_init);
 
@@ -239,9 +243,10 @@ fq_find(struct net *net, __be32 id, const struct in6_addr *src, const struct in6
 	hash = inet6_hash_frag(id, src, dst, ip6_frags.rnd);
 
 	q = inet_frag_find(&net->ipv6.frags, &ip6_frags, &arg, hash);
-	if (q == NULL)
+	if (IS_ERR_OR_NULL(q)) {
+		inet_frag_maybe_warn_overflow(q, pr_fmt());
 		return NULL;
-
+	}
 	return container_of(q, struct frag_queue, q);
 }
 
@@ -335,12 +340,11 @@ static int ip6_frag_queue(struct frag_queue *fq, struct sk_buff *skb,
 	}
 
 found:
-	/* RFC5722, Section 4:
-	 *                                  When reassembling an IPv6 datagram, if
+	/* RFC5722, Section 4, amended by Errata ID : 3089
+	 *                          When reassembling an IPv6 datagram, if
 	 *   one or more its constituent fragments is determined to be an
 	 *   overlapping fragment, the entire datagram (and any constituent
-	 *   fragments, including those not yet received) MUST be silently
-	 *   discarded.
+	 *   fragments) MUST be silently discarded.
 	 */
 
 	/* Check for overlap with preceding fragment. */
@@ -381,8 +385,17 @@ found:
 	}
 
 	if (fq->q.last_in == (INET_FRAG_FIRST_IN | INET_FRAG_LAST_IN) &&
-	    fq->q.meat == fq->q.len)
-		return ip6_frag_reasm(fq, prev, dev);
+	    fq->q.meat == fq->q.len) {
+		int res;
+		unsigned long orefdst = skb->_skb_refdst;
+
+		skb->_skb_refdst = 0UL;
+		res = ip6_frag_reasm(fq, prev, dev);
+		skb->_skb_refdst = orefdst;
+		return res;
+	}
+
+	skb_dst_drop(skb);
 
 	write_lock(&ip6_frags.lock);
 	list_move_tail(&fq->q.lru_list, &fq->q.net->lru_list);
@@ -464,8 +477,8 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 		head->next = clone;
 		skb_shinfo(clone)->frag_list = skb_shinfo(head)->frag_list;
 		skb_frag_list_init(head);
-		for (i=0; i<skb_shinfo(head)->nr_frags; i++)
-			plen += skb_shinfo(head)->frags[i].size;
+		for (i = 0; i < skb_shinfo(head)->nr_frags; i++)
+			plen += skb_frag_size(&skb_shinfo(head)->frags[i]);
 		clone->len = clone->data_len = head->data_len - plen;
 		head->data_len -= clone->len;
 		head->len -= clone->len;
@@ -503,6 +516,7 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 	head->tstamp = fq->q.stamp;
 	ipv6_hdr(head)->payload_len = htons(payload_len);
 	IP6CB(head)->nhoff = nhoff;
+	IP6CB(head)->flags |= IP6SKB_FRAGMENTED;
 
 	/* Yes, and fold redundant checksum back. 8) */
 	if (head->ip_summed == CHECKSUM_COMPLETE)
@@ -538,6 +552,9 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 	const struct ipv6hdr *hdr = ipv6_hdr(skb);
 	struct net *net = dev_net(skb_dst(skb)->dev);
 
+	if (IP6CB(skb)->flags & IP6SKB_FRAGMENTED)
+		goto fail_hdr;
+
 	IP6_INC_STATS_BH(net, ip6_dst_idev(skb_dst(skb)), IPSTATS_MIB_REASMREQDS);
 
 	/* Jumbo payload inhibits frag. header */
@@ -558,6 +575,7 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 				 ip6_dst_idev(skb_dst(skb)), IPSTATS_MIB_REASMOKS);
 
 		IP6CB(skb)->nhoff = (u8 *)fhdr - skb_network_header(skb);
+		IP6CB(skb)->flags |= IP6SKB_FRAGMENTED;
 		return 1;
 	}
 

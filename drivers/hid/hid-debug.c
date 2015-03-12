@@ -31,6 +31,7 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <linux/sched.h>
+#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/poll.h>
@@ -113,6 +114,14 @@ static const struct hid_usage_entry hid_usage_table[] = {
       {0, 0xbd, "FlareRelease"},
       {0, 0xbe, "LandingGear"},
       {0, 0xbf, "ToeBrake"},
+  {  6, 0, "GenericDeviceControls" },
+      {0, 0x20, "BatteryStrength" },
+      {0, 0x21, "WirelessChannel" },
+      {0, 0x22, "WirelessID" },
+      {0, 0x23, "DiscoverWirelessControl" },
+      {0, 0x24, "SecurityCodeCharacterEntered" },
+      {0, 0x25, "SecurityCodeCharactedErased" },
+      {0, 0x26, "SecurityCodeCleared" },
   {  7, 0, "Keyboard" },
   {  8, 0, "LED" },
       {0, 0x01, "NumLock"},
@@ -726,6 +735,8 @@ static const char *keys[KEY_MAX + 1] = {
 	[KEY_ALTERASE] = "AlternateErase",	[KEY_CANCEL] = "Cancel",
 	[KEY_BRIGHTNESSDOWN] = "BrightnessDown", [KEY_BRIGHTNESSUP] = "BrightnessUp",
 	[KEY_MEDIA] = "Media",			[KEY_UNKNOWN] = "Unknown",
+	[BTN_DPAD_UP] = "BtnDPadUp",		[BTN_DPAD_DOWN] = "BtnDPadDown",
+	[BTN_DPAD_LEFT] = "BtnDPadLeft",	[BTN_DPAD_RIGHT] = "BtnDPadRight",
 	[BTN_0] = "Btn0",			[BTN_1] = "Btn1",
 	[BTN_2] = "Btn2",			[BTN_3] = "Btn3",
 	[BTN_4] = "Btn4",			[BTN_5] = "Btn5",
@@ -755,7 +766,8 @@ static const char *keys[KEY_MAX + 1] = {
 	[BTN_TOOL_MOUSE] = "ToolMouse",		[BTN_TOOL_LENS] = "ToolLens",
 	[BTN_TOUCH] = "Touch",			[BTN_STYLUS] = "Stylus",
 	[BTN_STYLUS2] = "Stylus2",		[BTN_TOOL_DOUBLETAP] = "ToolDoubleTap",
-	[BTN_TOOL_TRIPLETAP] = "ToolTripleTap", [BTN_GEAR_DOWN] = "WheelBtn",
+	[BTN_TOOL_TRIPLETAP] = "ToolTripleTap",	[BTN_TOOL_QUADTAP] = "ToolQuadrupleTap",
+	[BTN_GEAR_DOWN] = "WheelBtn",
 	[BTN_GEAR_UP] = "Gear up",		[KEY_OK] = "Ok",
 	[KEY_SELECT] = "Select",		[KEY_GOTO] = "Goto",
 	[KEY_CLEAR] = "Clear",			[KEY_POWER2] = "Power2",
@@ -810,6 +822,16 @@ static const char *keys[KEY_MAX + 1] = {
 	[KEY_KBDILLUMDOWN] = "KbdIlluminationDown",
 	[KEY_KBDILLUMUP] = "KbdIlluminationUp",
 	[KEY_SWITCHVIDEOMODE] = "SwitchVideoMode",
+	[KEY_BUTTONCONFIG] = "ButtonConfig",
+	[KEY_TASKMANAGER] = "TaskManager",
+	[KEY_JOURNAL] = "Journal",
+	[KEY_CONTROLPANEL] = "ControlPanel",
+	[KEY_APPSELECT] = "AppSelect",
+	[KEY_SCREENSAVER] = "ScreenSaver",
+	[KEY_VOICECOMMAND] = "VoiceCommand",
+	[KEY_BRIGHTNESS_MIN] = "BrightnessMin",
+	[KEY_BRIGHTNESS_MAX] = "BrightnessMax",
+	[KEY_BRIGHTNESS_AUTO] = "BrightnessAuto",
 };
 
 static const char *relatives[REL_MAX + 1] = {

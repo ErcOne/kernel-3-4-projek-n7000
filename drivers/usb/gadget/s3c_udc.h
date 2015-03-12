@@ -19,8 +19,8 @@
  *
  */
 
-#ifndef __S3C_USB_GADGET
-#define __S3C_USB_GADGET
+#ifndef __S3C_UDC_H
+#define __S3C_UDC_H
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -49,7 +49,6 @@
 #include <asm/irq.h>
 #include <asm/system.h>
 #include <asm/unaligned.h>
-#include <linux/wakelock.h>
 
 /* Max packet size */
 #if defined(CONFIG_USB_GADGET_S3C_FS)
@@ -80,6 +79,7 @@
 #define DATA_STATE_RECV         4
 #define RegReadErr		5
 #define FAIL_TO_SETUP		6
+#define WAIT_FOR_SETUP_NAK	7
 
 #define TEST_J_SEL		0x1
 #define TEST_K_SEL		0x2
@@ -91,9 +91,9 @@
 /* IO
  */
 
-typedef enum ep_type {
-	ep_control, ep_bulk_in, ep_bulk_out, ep_interrupt, ep_iso_in
-} ep_type_t;
+enum ep_type_list {
+	ep_control, ep_bulk_in, ep_bulk_out, ep_interrupt, ep_isochronous
+};
 
 struct s3c_ep {
 	struct usb_ep ep;
@@ -107,7 +107,7 @@ struct s3c_ep {
 	u8 bEndpointAddress;
 	u8 bmAttributes;
 
-	ep_type_t ep_type;
+	enum ep_type_list ep_type;
 	u32 fifo;
 #ifdef CONFIG_USB_GADGET_S3C_FS
 	u32 csr1;
@@ -140,13 +140,9 @@ struct s3c_udc {
 	struct resource *regs_res;
 	unsigned int irq;
 	unsigned req_pending:1, req_std:1, req_config:1;
-	struct wake_lock	usbd_wake_lock;
-	struct wake_lock	usb_cb_wake_lock;
-	int softconnect;
-	int udc_enabled;
-	int is_usb_ready;
-	struct delayed_work	usb_ready_work;
-	struct mutex		mutex;
+	int udc_enabled:1;
+	int soft_connected:1;
+	struct usb_phy *phy;
 };
 
 extern struct s3c_udc *the_controller;

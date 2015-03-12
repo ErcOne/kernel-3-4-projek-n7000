@@ -22,15 +22,13 @@ static int load_script(struct linux_binprm *bprm,struct pt_regs *regs)
 	char interp[BINPRM_BUF_SIZE];
 	int retval;
 
-	if ((bprm->buf[0] != '#') || (bprm->buf[1] != '!') ||
-	    (bprm->recursion_depth > BINPRM_MAX_RECURSION))
+	if ((bprm->buf[0] != '#') || (bprm->buf[1] != '!'))
 		return -ENOEXEC;
 	/*
 	 * This section does the #! interpretation.
 	 * Sorta complicated, but hopefully it will work.  -TYT
 	 */
 
-	bprm->recursion_depth++;
 	allow_write_access(bprm->file);
 	fput(bprm->file);
 	bprm->file = NULL;
@@ -107,7 +105,8 @@ static struct linux_binfmt script_format = {
 
 static int __init init_script_binfmt(void)
 {
-	return register_binfmt(&script_format);
+	register_binfmt(&script_format);
+	return 0;
 }
 
 static void __exit exit_script_binfmt(void)

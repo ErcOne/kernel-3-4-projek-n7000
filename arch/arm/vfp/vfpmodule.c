@@ -8,7 +8,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#include <linux/module.h>
 #include <linux/types.h>
 #include <linux/cpu.h>
 #include <linux/cpu_pm.h>
@@ -22,7 +21,9 @@
 #include <linux/uaccess.h>
 #include <linux/user.h>
 
+#include <asm/cp15.h>
 #include <asm/cputype.h>
+#include <asm/system_info.h>
 #include <asm/thread_notify.h>
 #include <asm/vfp.h>
 
@@ -72,7 +73,7 @@ static bool vfp_state_in_hw(unsigned int cpu, struct thread_info *thread)
 /*
  * Force a reload of the VFP context from the thread structure.  We do
  * this by ensuring that access to the VFP hardware is disabled, and
- * clear last_VFP_context.  Must be called from non-preemptible context.
+ * clear vfp_current_hw_state.  Must be called from non-preemptible context.
  */
 static void vfp_force_reload(unsigned int cpu, struct thread_info *thread)
 {
@@ -412,7 +413,7 @@ void VFP_bounce(u32 trigger, u32 fpexc, struct pt_regs *regs)
 	 * If there isn't a second FP instruction, exit now. Note that
 	 * the FPEXC.FP2V bit is valid only if FPEXC.EX is 1.
 	 */
-	if (fpexc ^ (FPEXC_EX | FPEXC_FP2V))
+	if ((fpexc & (FPEXC_EX | FPEXC_FP2V)) != (FPEXC_EX | FPEXC_FP2V))
 		goto exit;
 
 	/*
@@ -436,6 +437,7 @@ static void vfp_enable(void *unused)
 
 	BUG_ON(preemptible());
 	access = get_copro_access();
+
 	/*
 	 * Enable full access to VFP (cp10 and cp11)
 	 */
@@ -639,9 +641,9 @@ int vfp_restore_user_hwstate(struct user_vfp __user *ufp,
 static int vfp_hotplug(struct notifier_block *b, unsigned long action,
 	void *hcpu)
 {
-	if (action == CPU_DYING || action == CPU_DYING_FROZEN)
-		vfp_current_hw_state[(long)hcpu] = NULL;
-	else if (action == CPU_STARTING || action == CPU_STARTING_FROZEN)
+	if (action == CPU_DYING || action == CPU_DYING_FROZEN) {
+		vfp_force_reload((long)hcpu, current_thread_info());
+	} else if (action == CPU_STARTING || action == CPU_STARTING_FROZEN)
 		vfp_enable(NULL);
 	return NOTIFY_OK;
 }
@@ -720,8 +722,10 @@ static int __init vfp_init(void)
 			if ((fmrx(MVFR1) & 0x000fff00) == 0x00011100)
 				elf_hwcap |= HWCAP_NEON;
 #endif
+#ifdef CONFIG_VFPv3
 			if ((fmrx(MVFR1) & 0xf0000000) == 0x10000000)
 				elf_hwcap |= HWCAP_VFPv4;
+#endif
 		}
 	}
 	return 0;

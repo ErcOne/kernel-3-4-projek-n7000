@@ -19,10 +19,7 @@
 #include <linux/interrupt.h>
 #include <linux/delay.h>
 #include <linux/pm_runtime.h>
-
-#ifdef CONFIG_HAS_EARLYSUSPEND
-#include <linux/earlysuspend.h>
-#endif
+#include <linux/lcd.h>
 
 #include <video/s5p-dp.h>
 
@@ -94,9 +91,13 @@ static int s5p_dp_read_edid(struct s5p_dp_device *dp)
 	 */
 
 	/* Read Extension Flag, Number of 128-byte EDID extension blocks */
-	s5p_dp_read_byte_from_i2c(dp, I2C_EDID_DEVICE_ADDR,
+	retval = s5p_dp_read_byte_from_i2c(dp, I2C_EDID_DEVICE_ADDR,
 				EDID_EXTENSION_FLAG,
 				&extend_block);
+	if (retval < 0) {
+		dev_err(dp->dev, "EDID extension flag failed!\n");
+		return -EIO;
+	}
 
 	if (extend_block > 0) {
 		dev_dbg(dp->dev, "EDID data includes a single extension!\n");
@@ -112,8 +113,8 @@ static int s5p_dp_read_edid(struct s5p_dp_device *dp)
 		}
 		sum = s5p_dp_calc_edid_check_sum(edid);
 		if (sum != 0) {
-			dev_err(dp->dev, "EDID bad checksum!\n");
-			return -EIO;
+			dev_warn(dp->dev, "EDID bad checksum!\n");
+			return 0;
 		}
 
 		/* Read additional EDID data */
@@ -128,19 +129,33 @@ static int s5p_dp_read_edid(struct s5p_dp_device *dp)
 		}
 		sum = s5p_dp_calc_edid_check_sum(&edid[EDID_BLOCK_LENGTH]);
 		if (sum != 0) {
-			dev_err(dp->dev, "EDID bad checksum!\n");
-			return -EIO;
+			dev_warn(dp->dev, "EDID bad checksum!\n");
+			return 0;
 		}
 
-		s5p_dp_read_byte_from_dpcd(dp, DPCD_ADDR_TEST_REQUEST,
-					&test_vector);
+		retval = s5p_dp_read_byte_from_dpcd(dp,
+				DPCD_ADDR_TEST_REQUEST,
+				&test_vector);
+		if (retval < 0) {
+			dev_err(dp->dev, "DPCD EDID Read failed!\n");
+			return retval;
+		}
+
 		if (test_vector & DPCD_TEST_EDID_READ) {
-			s5p_dp_write_byte_to_dpcd(dp,
-				DPCD_ADDR_TEST_EDID_CHECKSUM,
-				edid[EDID_BLOCK_LENGTH + EDID_CHECKSUM]);
-			s5p_dp_write_byte_to_dpcd(dp,
-				DPCD_ADDR_TEST_RESPONSE,
-				DPCD_TEST_EDID_CHECKSUM_WRITE);
+			retval = s5p_dp_write_byte_to_dpcd(dp,
+					DPCD_ADDR_TEST_EDID_CHECKSUM,
+					edid[EDID_BLOCK_LENGTH + EDID_CHECKSUM]);
+			if (retval < 0) {
+				dev_err(dp->dev, "DPCD EDID Write failed!\n");
+				return retval;
+			}
+			retval = s5p_dp_write_byte_to_dpcd(dp,
+					DPCD_ADDR_TEST_RESPONSE,
+					DPCD_TEST_EDID_CHECKSUM_WRITE);
+			if (retval < 0) {
+				dev_err(dp->dev, "DPCD EDID checksum failed!\n");
+				return retval;
+			}
 		}
 	} else {
 		dev_info(dp->dev, "EDID data does not include any extensions.\n");
@@ -157,20 +172,33 @@ static int s5p_dp_read_edid(struct s5p_dp_device *dp)
 		}
 		sum = s5p_dp_calc_edid_check_sum(edid);
 		if (sum != 0) {
-			dev_err(dp->dev, "EDID bad checksum!\n");
-			return -EIO;
+			dev_warn(dp->dev, "EDID bad checksum!\n");
+			return 0;
 		}
 
-		s5p_dp_read_byte_from_dpcd(dp,
-			DPCD_ADDR_TEST_REQUEST,
-			&test_vector);
+		retval = s5p_dp_read_byte_from_dpcd(dp,
+				DPCD_ADDR_TEST_REQUEST,
+				&test_vector);
+		if (retval < 0) {
+			dev_err(dp->dev, "DPCD EDID Read failed!\n");
+			return retval;
+		}
+
 		if (test_vector & DPCD_TEST_EDID_READ) {
-			s5p_dp_write_byte_to_dpcd(dp,
-				DPCD_ADDR_TEST_EDID_CHECKSUM,
-				edid[EDID_CHECKSUM]);
-			s5p_dp_write_byte_to_dpcd(dp,
-				DPCD_ADDR_TEST_RESPONSE,
-				DPCD_TEST_EDID_CHECKSUM_WRITE);
+			retval = s5p_dp_write_byte_to_dpcd(dp,
+					DPCD_ADDR_TEST_EDID_CHECKSUM,
+					edid[EDID_CHECKSUM]);
+			if (retval < 0) {
+				dev_err(dp->dev, "DPCD EDID Write failed!\n");
+				return retval;
+			}
+			retval = s5p_dp_write_byte_to_dpcd(dp,
+					DPCD_ADDR_TEST_RESPONSE,
+					DPCD_TEST_EDID_CHECKSUM_WRITE);
+			if (retval < 0) {
+				dev_err(dp->dev, "DPCD EDID checksum failed!\n");
+				return retval;
+			}
 		}
 	}
 
@@ -185,9 +213,11 @@ static int s5p_dp_handle_edid(struct s5p_dp_device *dp)
 	int retval;
 
 	/* Read DPCD DPCD_ADDR_DPCD_REV~RECEIVE_PORT1_CAP_1 */
-	s5p_dp_read_bytes_from_dpcd(dp,
-		DPCD_ADDR_DPCD_REV,
-		12, buf);
+	retval = s5p_dp_read_bytes_from_dpcd(dp,
+			DPCD_ADDR_DPCD_REV,
+			12, buf);
+	if (retval < 0)
+		return retval;
 
 	/* Read EDID */
 	for (i = 0; i < 3; i++) {
@@ -199,20 +229,45 @@ static int s5p_dp_handle_edid(struct s5p_dp_device *dp)
 	return retval;
 }
 
-static void s5p_dp_enable_rx_to_enhanced_mode(struct s5p_dp_device *dp,
+static int s5p_dp_enable_rx_to_enhanced_mode(struct s5p_dp_device *dp,
 						bool enable)
 {
 	u8 data;
+	int retval;
 
-	s5p_dp_read_byte_from_dpcd(dp, DPCD_ADDR_LANE_COUNT_SET, &data);
+	retval = s5p_dp_read_byte_from_dpcd(dp,
+			DPCD_ADDR_LANE_COUNT_SET, &data);
+	if (retval < 0)
+		return retval;
 
-	if (enable)
-		s5p_dp_write_byte_to_dpcd(dp, DPCD_ADDR_LANE_COUNT_SET,
-			DPCD_ENHANCED_FRAME_EN |
-			DPCD_LANE_COUNT_SET(data));
-	else
-		s5p_dp_write_byte_to_dpcd(dp, DPCD_ADDR_LANE_COUNT_SET,
-			DPCD_LANE_COUNT_SET(data));
+	if (enable) {
+		retval = s5p_dp_write_byte_to_dpcd(dp,
+				DPCD_ADDR_LANE_COUNT_SET,
+				DPCD_ENHANCED_FRAME_EN |
+				DPCD_LANE_COUNT_SET(data));
+	} else {
+		retval = s5p_dp_write_byte_to_dpcd(dp,
+				DPCD_ADDR_CONFIGURATION_SET, 0);
+
+		retval = s5p_dp_write_byte_to_dpcd(dp,
+				DPCD_ADDR_LANE_COUNT_SET,
+				DPCD_LANE_COUNT_SET(data));
+	}
+
+	return retval;
+}
+
+void s5p_dp_rx_control(struct s5p_dp_device *dp, bool enable)
+{
+	s5p_dp_write_byte_to_dpcd(dp, DPCD_ADDR_USER_DEFINED1,0);
+	s5p_dp_write_byte_to_dpcd(dp, DPCD_ADDR_USER_DEFINED2,0x90);
+
+	if (enable) {
+		s5p_dp_write_byte_to_dpcd(dp, DPCD_ADDR_USER_DEFINED3,0x84);
+		s5p_dp_write_byte_to_dpcd(dp, DPCD_ADDR_USER_DEFINED3,0x00);
+	} else {
+		s5p_dp_write_byte_to_dpcd(dp, DPCD_ADDR_USER_DEFINED3,0x80);
+	}
 }
 
 static int s5p_dp_is_enhanced_mode_available(struct s5p_dp_device *dp)
@@ -220,28 +275,56 @@ static int s5p_dp_is_enhanced_mode_available(struct s5p_dp_device *dp)
 	u8 data;
 	int retval;
 
-	s5p_dp_read_byte_from_dpcd(dp, DPCD_ADDR_MAX_LANE_COUNT, &data);
-	retval = DPCD_ENHANCED_FRAME_CAP(data);
+	retval = s5p_dp_read_byte_from_dpcd(dp,
+			DPCD_ADDR_MAX_LANE_COUNT, &data);
+	if (retval < 0)
+		return retval;
 
-	return retval;
+	return DPCD_ENHANCED_FRAME_CAP(data);
 }
 
-static void s5p_dp_set_enhanced_mode(struct s5p_dp_device *dp)
+static void s5p_dp_disable_rx_zmux(struct s5p_dp_device *dp)
+{
+	s5p_dp_write_byte_to_dpcd(dp,
+			DPCD_ADDR_USER_DEFINED1, 0);
+	s5p_dp_write_byte_to_dpcd(dp,
+			DPCD_ADDR_USER_DEFINED2, 0x83);
+	s5p_dp_write_byte_to_dpcd(dp,
+			DPCD_ADDR_USER_DEFINED3, 0x27);
+}
+
+static int s5p_dp_set_enhanced_mode(struct s5p_dp_device *dp)
 {
 	u8 data;
+	int retval;
 
-	data = s5p_dp_is_enhanced_mode_available(dp);
-	s5p_dp_enable_rx_to_enhanced_mode(dp, data);
+	retval = s5p_dp_is_enhanced_mode_available(dp);
+	if (retval < 0)
+		return retval;
+
+	data = (u8)retval;
+	retval = s5p_dp_enable_rx_to_enhanced_mode(dp, data);
+	if (retval < 0)
+		return retval;
+
 	s5p_dp_enable_enhanced_mode(dp, data);
+
+	return 0;
 }
 
-static void s5p_dp_training_pattern_dis(struct s5p_dp_device *dp)
+static int s5p_dp_training_pattern_dis(struct s5p_dp_device *dp)
 {
+	int retval;
+
 	s5p_dp_set_training_pattern(dp, DP_NONE);
 
-	s5p_dp_write_byte_to_dpcd(dp,
-		DPCD_ADDR_TRAINING_PATTERN_SET,
-		DPCD_TRAINING_PATTERN_DISABLED);
+	retval = s5p_dp_write_byte_to_dpcd(dp,
+			DPCD_ADDR_TRAINING_PATTERN_SET,
+			DPCD_TRAINING_PATTERN_DISABLED);
+	if (retval < 0)
+		return retval;
+
+	return 0;
 }
 
 static void s5p_dp_set_lane_lane_pre_emphasis(struct s5p_dp_device *dp,
@@ -265,11 +348,12 @@ static void s5p_dp_set_lane_lane_pre_emphasis(struct s5p_dp_device *dp,
 	}
 }
 
-static void s5p_dp_link_start(struct s5p_dp_device *dp)
+static int s5p_dp_link_start(struct s5p_dp_device *dp)
 {
-	u8 buf[5];
+	u8 buf[4];
 	int lane;
 	int lane_count;
+	int retval;
 
 	lane_count = dp->link_train.lane_count;
 
@@ -280,8 +364,12 @@ static void s5p_dp_link_start(struct s5p_dp_device *dp)
 		dp->link_train.cr_loop[lane] = 0;
 
 	/* Set sink to D0 (Sink Not Ready) mode. */
-	s5p_dp_write_byte_to_dpcd(dp, DPCD_ADDR_SINK_POWER_STATE,
+	retval = s5p_dp_write_byte_to_dpcd(dp, DPCD_ADDR_SINK_POWER_STATE,
 				DPCD_SET_POWER_STATE_D0);
+	if (retval < 0) {
+		dev_err(dp->dev, "failed to set sink device to D0!\n");
+		return retval;
+	}
 
 	/* Set link rate and count as you want to establish*/
 	s5p_dp_set_link_bandwidth(dp, dp->link_train.link_rate);
@@ -290,32 +378,46 @@ static void s5p_dp_link_start(struct s5p_dp_device *dp)
 	/* Setup RX configuration */
 	buf[0] = dp->link_train.link_rate;
 	buf[1] = dp->link_train.lane_count;
-	s5p_dp_write_bytes_to_dpcd(dp, DPCD_ADDR_LINK_BW_SET,
-				2, buf);
+	retval = s5p_dp_write_bytes_to_dpcd(dp, DPCD_ADDR_LINK_BW_SET,
+					2, buf);
+	if (retval < 0) {
+		dev_err(dp->dev, "failed to set bandwidth and lane count!\n");
+		return retval;
+	}
 
-	/* Set TX pre-emphasis to minimum */
+	/* Set TX pre-emphasis to level1 */
 	for (lane = 0; lane < lane_count; lane++)
 		s5p_dp_set_lane_lane_pre_emphasis(dp,
-			PRE_EMPHASIS_LEVEL_0, lane);
+			PRE_EMPHASIS_LEVEL_1, lane);
 
 	/* Set training pattern 1 */
 	s5p_dp_set_training_pattern(dp, TRAINING_PTN1);
 
 	/* Set RX training pattern */
-	buf[0] = DPCD_SCRAMBLING_DISABLED |
-		 DPCD_TRAINING_PATTERN_1;
-	s5p_dp_write_byte_to_dpcd(dp,
-		DPCD_ADDR_TRAINING_PATTERN_SET, buf[0]);
+	retval = s5p_dp_write_byte_to_dpcd(dp,
+			DPCD_ADDR_TRAINING_PATTERN_SET,
+			DPCD_SCRAMBLING_DISABLED |
+			DPCD_TRAINING_PATTERN_1);
+	if (retval < 0) {
+		dev_err(dp->dev, "failed to set training pattern 1!\n");
+		return retval;
+	}
 
 	for (lane = 0; lane < lane_count; lane++)
 		buf[lane] = DPCD_PRE_EMPHASIS_PATTERN2_LEVEL0 |
 			    DPCD_VOLTAGE_SWING_PATTERN1_LEVEL0;
-	s5p_dp_write_bytes_to_dpcd(dp,
-		DPCD_ADDR_TRAINING_PATTERN_SET,
-		lane_count, buf);
+	retval = s5p_dp_write_bytes_to_dpcd(dp,
+			DPCD_ADDR_TRAINING_LANE0_SET,
+			lane_count, buf);
+	if (retval < 0) {
+		dev_err(dp->dev, "failed to set training lane!\n");
+		return retval;
+	}
+
+	return 0;
 }
 
-static unsigned char s5p_dp_get_lane_status(u8 link_status[6], int lane)
+static unsigned char s5p_dp_get_lane_status(u8 link_status[2], int lane)
 {
 	int shift = (lane & 1) * 4;
 	u8 link_value = link_status[lane>>1];
@@ -323,7 +425,7 @@ static unsigned char s5p_dp_get_lane_status(u8 link_status[6], int lane)
 	return (link_value >> shift) & 0xf;
 }
 
-static int s5p_dp_clock_recovery_ok(u8 link_status[6], int lane_count)
+static int s5p_dp_clock_recovery_ok(u8 link_status[2], int lane_count)
 {
 	int lane;
 	u8 lane_status;
@@ -336,22 +438,23 @@ static int s5p_dp_clock_recovery_ok(u8 link_status[6], int lane_count)
 	return 0;
 }
 
-static int s5p_dp_channel_eq_ok(u8 link_status[6], int lane_count)
+static int s5p_dp_channel_eq_ok(u8 link_align[3], int lane_count)
 {
 	int lane;
 	u8 lane_align;
 	u8 lane_status;
 
-	lane_align = link_status[2];
-	if ((lane_align == DPCD_INTERLANE_ALIGN_DONE) == 0)
+	lane_align = link_align[2];
+	if ((lane_align & DPCD_INTERLANE_ALIGN_DONE) == 0)
 		return -EINVAL;
 
 	for (lane = 0; lane < lane_count; lane++) {
-		lane_status = s5p_dp_get_lane_status(link_status, lane);
+		lane_status = s5p_dp_get_lane_status(link_align, lane);
 		lane_status &= DPCD_CHANNEL_EQ_BITS;
 		if (lane_status != DPCD_CHANNEL_EQ_BITS)
 			return -EINVAL;
 	}
+
 	return 0;
 }
 
@@ -395,8 +498,9 @@ static void s5p_dp_set_lane_link_training(struct s5p_dp_device *dp,
 	}
 }
 
-static unsigned int s5p_dp_get_lane_link_training(struct s5p_dp_device *dp,
-						int lane)
+static unsigned int s5p_dp_get_lane_link_training(
+				struct s5p_dp_device *dp,
+				int lane)
 {
 	u32 reg;
 
@@ -420,172 +524,221 @@ static unsigned int s5p_dp_get_lane_link_training(struct s5p_dp_device *dp,
 
 static void s5p_dp_reduce_link_rate(struct s5p_dp_device *dp)
 {
-	if (dp->link_train.link_rate == LINK_RATE_2_70GBPS) {
-		/* set to reduced bit rate */
-		dp->link_train.link_rate = LINK_RATE_1_62GBPS;
-		dev_err(dp->dev, "set to bandwidth %.2x\n",
-			dp->link_train.link_rate);
-		dp->link_train.lt_state = START;
-	} else {
-		s5p_dp_training_pattern_dis(dp);
-		/* set enhanced mode if available */
-		s5p_dp_set_enhanced_mode(dp);
-		dp->link_train.lt_state = FAILED;
-	}
-}
+	s5p_dp_training_pattern_dis(dp);
 
-static void s5p_dp_get_adjust_train(struct s5p_dp_device *dp,
-				u8 adjust_request[2])
-{
-	int lane;
-	int lane_count;
-	u8 voltage_swing;
-	u8 pre_emphasis;
-	u8 training_lane;
-
-	lane_count = dp->link_train.lane_count;
-	for (lane = 0; lane < lane_count; lane++) {
-		voltage_swing = s5p_dp_get_adjust_request_voltage(
-						adjust_request, lane);
-		pre_emphasis = s5p_dp_get_adjust_request_pre_emphasis(
-						adjust_request, lane);
-		training_lane = DPCD_VOLTAGE_SWING_SET(voltage_swing) |
-				DPCD_PRE_EMPHASIS_SET(pre_emphasis);
-
-		if (voltage_swing == VOLTAGE_LEVEL_3 ||
-		   pre_emphasis == PRE_EMPHASIS_LEVEL_3) {
-			training_lane |= DPCD_MAX_SWING_REACHED;
-			training_lane |= DPCD_MAX_PRE_EMPHASIS_REACHED;
-		}
-		dp->link_train.training_lane[lane] = training_lane;
-	}
-}
-
-static int s5p_dp_check_max_cr_loop(struct s5p_dp_device *dp, u8 voltage_swing)
-{
-	int lane;
-	int lane_count;
-
-	lane_count = dp->link_train.lane_count;
-	for (lane = 0; lane < lane_count; lane++) {
-		if (voltage_swing == VOLTAGE_LEVEL_3 ||
-			dp->link_train.cr_loop[lane] == MAX_CR_LOOP)
-			return -EINVAL;
-	}
-	return 0;
+	dp->link_train.lt_state = FAILED;
 }
 
 static int s5p_dp_process_clock_recovery(struct s5p_dp_device *dp)
 {
-	u8 data;
-	u8 link_status[6];
+	u8 link_status[2];
 	int lane;
 	int lane_count;
-	u8 buf[5];
 
 	u8 adjust_request[2];
 	u8 voltage_swing;
 	u8 pre_emphasis;
 	u8 training_lane;
+	int retval;
 
 	udelay(100);
 
-	s5p_dp_read_bytes_from_dpcd(dp, DPCD_ADDR_LANE0_1_STATUS,
-				6, link_status);
 	lane_count = dp->link_train.lane_count;
+
+	retval = s5p_dp_read_bytes_from_dpcd(dp,
+			DPCD_ADDR_LANE0_1_STATUS,
+			2, link_status);
+	if (retval < 0) {
+		dev_err(dp->dev, "failed to read lane status!\n");
+		return retval;
+	}
 
 	if (s5p_dp_clock_recovery_ok(link_status, lane_count) == 0) {
 		/* set training pattern 2 for EQ */
 		s5p_dp_set_training_pattern(dp, TRAINING_PTN2);
 
-		adjust_request[0] = link_status[4];
-		adjust_request[1] = link_status[5];
-
-		s5p_dp_get_adjust_train(dp, adjust_request);
-
-		buf[0] = DPCD_SCRAMBLING_DISABLED |
-			 DPCD_TRAINING_PATTERN_2;
-		s5p_dp_write_byte_to_dpcd(dp,
-			DPCD_ADDR_TRAINING_LANE0_SET,
-			buf[0]);
-
 		for (lane = 0; lane < lane_count; lane++) {
-			s5p_dp_set_lane_link_training(dp,
-				dp->link_train.training_lane[lane],
-				lane);
-			buf[lane] = dp->link_train.training_lane[lane];
-			s5p_dp_write_byte_to_dpcd(dp,
-				DPCD_ADDR_TRAINING_LANE0_SET + lane,
-				buf[lane]);
-		}
-		dp->link_train.lt_state = EQUALIZER_TRAINING;
-	} else {
-		s5p_dp_read_byte_from_dpcd(dp,
-			DPCD_ADDR_ADJUST_REQUEST_LANE0_1,
-			&data);
-		adjust_request[0] = data;
-
-		s5p_dp_read_byte_from_dpcd(dp,
-			DPCD_ADDR_ADJUST_REQUEST_LANE2_3,
-			&data);
-		adjust_request[1] = data;
-
-		for (lane = 0; lane < lane_count; lane++) {
-			training_lane = s5p_dp_get_lane_link_training(dp, lane);
+			retval = s5p_dp_read_bytes_from_dpcd(dp,
+					DPCD_ADDR_ADJUST_REQUEST_LANE0_1,
+					2, adjust_request);
+			if (retval < 0) {
+				dev_err(dp->dev, "failed to read adjust request!\n");
+				return retval;
+			}
 
 			voltage_swing = s5p_dp_get_adjust_request_voltage(
 							adjust_request, lane);
 			pre_emphasis = s5p_dp_get_adjust_request_pre_emphasis(
 							adjust_request, lane);
-			if ((DPCD_VOLTAGE_SWING_GET(training_lane) == voltage_swing) &&
-			    (DPCD_PRE_EMPHASIS_GET(training_lane) == pre_emphasis))
-				dp->link_train.cr_loop[lane]++;
+			training_lane = DPCD_VOLTAGE_SWING_SET(voltage_swing) |
+					DPCD_PRE_EMPHASIS_SET(pre_emphasis);
+
+			if (voltage_swing == VOLTAGE_LEVEL_3)
+				training_lane |= DPCD_MAX_SWING_REACHED;
+			if (pre_emphasis == PRE_EMPHASIS_LEVEL_3)
+				training_lane |= DPCD_MAX_PRE_EMPHASIS_REACHED;
+
 			dp->link_train.training_lane[lane] = training_lane;
+
+			s5p_dp_set_lane_link_training(dp,
+				dp->link_train.training_lane[lane],
+				lane);
 		}
 
-		if (s5p_dp_check_max_cr_loop(dp, voltage_swing) != 0) {
-			s5p_dp_reduce_link_rate(dp);
-		} else {
-			s5p_dp_get_adjust_train(dp, adjust_request);
+		retval = s5p_dp_write_byte_to_dpcd(dp,
+				DPCD_ADDR_TRAINING_PATTERN_SET,
+				DPCD_SCRAMBLING_DISABLED |
+				DPCD_TRAINING_PATTERN_2);
+		if (retval < 0) {
+			dev_err(dp->dev, "failed to set training pattern 2!\n");
+			return retval;
+		}
 
-			for (lane = 0; lane < lane_count; lane++) {
-				s5p_dp_set_lane_link_training(dp,
-					dp->link_train.training_lane[lane],
-					lane);
-				buf[lane] = dp->link_train.training_lane[lane];
-				s5p_dp_write_byte_to_dpcd(dp,
-					DPCD_ADDR_TRAINING_LANE0_SET + lane,
-					buf[lane]);
+		retval = s5p_dp_write_bytes_to_dpcd(dp,
+				DPCD_ADDR_TRAINING_LANE0_SET,
+				lane_count,
+				dp->link_train.training_lane);
+		if (retval < 0) {
+			dev_err(dp->dev, "failed to set training lane!\n");
+			return retval;
+		}
+
+		dev_info(dp->dev, "Link Training Clock Recovery success\n");
+		dp->link_train.lt_state = EQUALIZER_TRAINING;
+	} else {
+		for (lane = 0; lane < lane_count; lane++) {
+			training_lane = s5p_dp_get_lane_link_training(
+							dp, lane);
+			retval = s5p_dp_read_bytes_from_dpcd(dp,
+					DPCD_ADDR_ADJUST_REQUEST_LANE0_1,
+					2, adjust_request);
+			if (retval < 0) {
+				dev_err(dp->dev, "failed to read adjust request!\n");
+				return retval;
 			}
+
+			voltage_swing = s5p_dp_get_adjust_request_voltage(
+							adjust_request, lane);
+			pre_emphasis = s5p_dp_get_adjust_request_pre_emphasis(
+							adjust_request, lane);
+
+			if (voltage_swing == VOLTAGE_LEVEL_3 ||
+			    pre_emphasis == PRE_EMPHASIS_LEVEL_3) {
+				dev_err(dp->dev, "voltage or pre emphasis reached max level\n");
+				goto reduce_link_rate;
+			}
+
+			if ((DPCD_VOLTAGE_SWING_GET(training_lane) ==
+					voltage_swing) &&
+			   (DPCD_PRE_EMPHASIS_GET(training_lane) ==
+					pre_emphasis)) {
+				dp->link_train.cr_loop[lane]++;
+				if (dp->link_train.cr_loop[lane] == MAX_CR_LOOP) {
+					dev_err(dp->dev, "CR Max loop\n");
+					goto reduce_link_rate;
+				}
+			}
+
+			training_lane = DPCD_VOLTAGE_SWING_SET(voltage_swing) |
+					DPCD_PRE_EMPHASIS_SET(pre_emphasis);
+
+			if (voltage_swing == VOLTAGE_LEVEL_3)
+				training_lane |= DPCD_MAX_SWING_REACHED;
+			if (pre_emphasis == PRE_EMPHASIS_LEVEL_3)
+				training_lane |= DPCD_MAX_PRE_EMPHASIS_REACHED;
+
+			dp->link_train.training_lane[lane] = training_lane;
+
+			s5p_dp_set_lane_link_training(dp,
+				dp->link_train.training_lane[lane], lane);
+		}
+
+		retval = s5p_dp_write_bytes_to_dpcd(dp,
+				DPCD_ADDR_TRAINING_LANE0_SET,
+				lane_count,
+				dp->link_train.training_lane);
+		if (retval < 0) {
+			dev_err(dp->dev, "failed to set training lane!\n");
+			return retval;
 		}
 	}
 
 	return 0;
+
+reduce_link_rate:
+	s5p_dp_reduce_link_rate(dp);
+	return -EIO;
 }
 
 static int s5p_dp_process_equalizer_training(struct s5p_dp_device *dp)
 {
-	u8 link_status[6];
+	u8 link_status[2];
+	u8 link_align[3];
 	int lane;
 	int lane_count;
-	u8 buf[5];
 	u32 reg;
 
 	u8 adjust_request[2];
+	u8 voltage_swing;
+	u8 pre_emphasis;
+	u8 training_lane;
+	int retval;
 
 	udelay(400);
 
-	s5p_dp_read_bytes_from_dpcd(dp, DPCD_ADDR_LANE0_1_STATUS,
-				6, link_status);
 	lane_count = dp->link_train.lane_count;
 
-	if (s5p_dp_clock_recovery_ok(link_status, lane_count) == 0) {
-		adjust_request[0] = link_status[4];
-		adjust_request[1] = link_status[5];
+	retval = s5p_dp_read_bytes_from_dpcd(dp,
+			DPCD_ADDR_LANE0_1_STATUS,
+			2, link_status);
+	if (retval < 0) {
+		dev_err(dp->dev, "failed to read lane status!\n");
+		return retval;
+	}
 
-		if (s5p_dp_channel_eq_ok(link_status, lane_count) == 0) {
+	if (s5p_dp_clock_recovery_ok(link_status, lane_count) == 0) {
+		link_align[0] = link_status[0];
+		link_align[1] = link_status[1];
+
+		retval = s5p_dp_read_byte_from_dpcd(dp,
+				DPCD_ADDR_LANE_ALIGN_STATUS_UPDATED,
+				&link_align[2]);
+		if (retval < 0) {
+			dev_err(dp->dev, "failed to read lane aligne status!\n");
+			return retval;
+		}
+
+		for (lane = 0; lane < lane_count; lane++) {
+			retval = s5p_dp_read_bytes_from_dpcd(dp,
+					DPCD_ADDR_ADJUST_REQUEST_LANE0_1,
+					2, adjust_request);
+			if (retval < 0) {
+				dev_err(dp->dev, "failed to read adjust request!\n");
+				return retval;
+			}
+
+			voltage_swing = s5p_dp_get_adjust_request_voltage(
+							adjust_request, lane);
+			pre_emphasis = s5p_dp_get_adjust_request_pre_emphasis(
+							adjust_request, lane);
+			training_lane = DPCD_VOLTAGE_SWING_SET(voltage_swing) |
+					DPCD_PRE_EMPHASIS_SET(pre_emphasis);
+
+			if (voltage_swing == VOLTAGE_LEVEL_3)
+				training_lane |= DPCD_MAX_SWING_REACHED;
+			if (pre_emphasis == PRE_EMPHASIS_LEVEL_3)
+				training_lane |= DPCD_MAX_PRE_EMPHASIS_REACHED;
+
+			dp->link_train.training_lane[lane] = training_lane;
+		}
+
+		if (s5p_dp_channel_eq_ok(link_align, lane_count) == 0) {
 			/* traing pattern Set to Normal */
-			s5p_dp_training_pattern_dis(dp);
+			retval = s5p_dp_training_pattern_dis(dp);
+			if (retval < 0) {
+				dev_err(dp->dev, "failed to disable training pattern!\n");
+				return retval;
+			}
 
 			dev_info(dp->dev, "Link Training success!\n");
 
@@ -598,8 +751,6 @@ static int s5p_dp_process_equalizer_training(struct s5p_dp_device *dp)
 			dp->link_train.lane_count = reg;
 			dev_dbg(dp->dev, "final lane count = %.2x\n",
 				dp->link_train.lane_count);
-			/* set enhanced mode if available */
-			s5p_dp_set_enhanced_mode(dp);
 
 			dp->link_train.lt_state = FINISHED;
 		} else {
@@ -607,58 +758,79 @@ static int s5p_dp_process_equalizer_training(struct s5p_dp_device *dp)
 			dp->link_train.eq_loop++;
 
 			if (dp->link_train.eq_loop > MAX_EQ_LOOP) {
-				s5p_dp_reduce_link_rate(dp);
-			} else {
-				s5p_dp_get_adjust_train(dp, adjust_request);
+				dev_err(dp->dev, "EQ Max loop\n");
+				goto reduce_link_rate;
+			}
 
-				for (lane = 0; lane < lane_count; lane++) {
-					s5p_dp_set_lane_link_training(dp,
-						dp->link_train.training_lane[lane],
-						lane);
-					buf[lane] = dp->link_train.training_lane[lane];
-					s5p_dp_write_byte_to_dpcd(dp,
-						DPCD_ADDR_TRAINING_LANE0_SET + lane,
-						buf[lane]);
-				}
+			for (lane = 0; lane < lane_count; lane++)
+				s5p_dp_set_lane_link_training(dp,
+					dp->link_train.training_lane[lane],
+					lane);
+
+			retval = s5p_dp_write_bytes_to_dpcd(dp,
+					DPCD_ADDR_TRAINING_LANE0_SET,
+					lane_count,
+					dp->link_train.training_lane);
+			if (retval < 0) {
+				dev_err(dp->dev, "failed to set training lane!\n");
+				return retval;
 			}
 		}
 	} else {
-		s5p_dp_reduce_link_rate(dp);
+		goto reduce_link_rate;
 	}
 
 	return 0;
+
+reduce_link_rate:
+	s5p_dp_reduce_link_rate(dp);
+	return -EIO;
 }
 
-static void s5p_dp_get_max_rx_bandwidth(struct s5p_dp_device *dp,
-			u8 *bandwidth)
+static int s5p_dp_get_max_rx_bandwidth(struct s5p_dp_device *dp,
+					u8 *bandwidth)
 {
 	u8 data;
+	int retval;
 
 	/*
 	 * For DP rev.1.1, Maximum link rate of Main Link lanes
 	 * 0x06 = 1.62 Gbps, 0x0a = 2.7 Gbps
 	 */
-	s5p_dp_read_byte_from_dpcd(dp, DPCD_ADDR_MAX_LINK_RATE, &data);
+	retval = s5p_dp_read_byte_from_dpcd(dp,
+			DPCD_ADDR_MAX_LINK_RATE, &data);
+	if (retval < 0)
+		return retval;
+
 	*bandwidth = data;
+	return 0;
 }
 
-static void s5p_dp_get_max_rx_lane_count(struct s5p_dp_device *dp,
-			u8 *lane_count)
+static int s5p_dp_get_max_rx_lane_count(struct s5p_dp_device *dp,
+					u8 *lane_count)
 {
 	u8 data;
+	int retval;
 
 	/*
 	 * For DP rev.1.1, Maximum number of Main Link lanes
 	 * 0x01 = 1 lane, 0x02 = 2 lanes, 0x04 = 4 lanes
 	 */
-	s5p_dp_read_byte_from_dpcd(dp, DPCD_ADDR_MAX_LANE_COUNT, &data);
+	retval = s5p_dp_read_byte_from_dpcd(dp,
+			DPCD_ADDR_MAX_LANE_COUNT, &data);
+	if (retval < 0)
+		return retval;
+
 	*lane_count = DPCD_MAX_LANE_COUNT(data);
+	return 0;
 }
 
-static void s5p_dp_init_training(struct s5p_dp_device *dp,
+static int s5p_dp_init_training(struct s5p_dp_device *dp,
 			enum link_lane_count_type max_lane,
 			enum link_rate_type max_rate)
 {
+	int retval;
+
 	/*
 	 * MACRO_RST must be applied after the PLL_LOCK to avoid
 	 * the DP inter pair skew issue for at least 10 us
@@ -666,8 +838,13 @@ static void s5p_dp_init_training(struct s5p_dp_device *dp,
 	s5p_dp_reset_macro(dp);
 
 	/* Initialize by reading RX's DPCD */
-	s5p_dp_get_max_rx_bandwidth(dp, &dp->link_train.link_rate);
-	s5p_dp_get_max_rx_lane_count(dp, &dp->link_train.lane_count);
+	retval = s5p_dp_get_max_rx_bandwidth(dp, &dp->link_train.link_rate);
+	if (retval < 0)
+		return retval;
+
+	retval = s5p_dp_get_max_rx_lane_count(dp, &dp->link_train.lane_count);
+	if (retval < 0)
+		return retval;
 
 	if ((dp->link_train.link_rate != LINK_RATE_1_62GBPS) &&
 	   (dp->link_train.link_rate != LINK_RATE_2_70GBPS)) {
@@ -690,18 +867,14 @@ static void s5p_dp_init_training(struct s5p_dp_device *dp,
 
 	/* All DP analog module power up */
 	s5p_dp_set_analog_power_down(dp, POWER_ALL, 0);
+
+	return 0;
 }
 
 static int s5p_dp_sw_link_training(struct s5p_dp_device *dp)
 {
 	int retval = 0;
-	int training_finished;
-
-	/* Turn off unnecessary lane */
-	if (dp->link_train.lane_count == 1)
-		s5p_dp_set_analog_power_down(dp, CH1_BLOCK, 1);
-
-	training_finished = 0;
+	int training_finished = 0;
 
 	dp->link_train.lt_state = START;
 
@@ -709,13 +882,19 @@ static int s5p_dp_sw_link_training(struct s5p_dp_device *dp)
 	while (!training_finished) {
 		switch (dp->link_train.lt_state) {
 		case START:
-			s5p_dp_link_start(dp);
+			retval = s5p_dp_link_start(dp);
+			if (retval)
+				dev_err(dp->dev, "LT Start failed\n");
 			break;
 		case CLOCK_RECOVERY:
-			s5p_dp_process_clock_recovery(dp);
+			retval = s5p_dp_process_clock_recovery(dp);
+			if (retval)
+				dev_err(dp->dev, "LT CR failed\n");
 			break;
 		case EQUALIZER_TRAINING:
-			s5p_dp_process_equalizer_training(dp);
+			retval = s5p_dp_process_equalizer_training(dp);
+			if (retval)
+				dev_err(dp->dev, "LT EQ failed\n");
 			break;
 		case FINISHED:
 			training_finished = 1;
@@ -732,17 +911,15 @@ static int s5p_dp_set_link_train(struct s5p_dp_device *dp,
 				u32 count,
 				u32 bwtype)
 {
-	int i;
 	int retval;
 
-	for (i = 0; i < DP_TIMEOUT_LOOP_COUNT; i++) {
-		s5p_dp_init_training(dp, count, bwtype);
-		retval = s5p_dp_sw_link_training(dp);
-		if (retval == 0)
-			break;
+	retval = s5p_dp_init_training(dp, count, bwtype);
+	if (retval < 0)
+		dev_err(dp->dev, "DP LT init failed!\n");
 
-		udelay(100);
-	}
+	retval = s5p_dp_sw_link_training(dp);
+	if (retval < 0)
+		dev_err(dp->dev, "DP LT failed!\n");
 
 	return retval;
 }
@@ -775,7 +952,7 @@ static int s5p_dp_config_video(struct s5p_dp_device *dp,
 			return -ETIMEDOUT;
 		}
 
-		mdelay(100);
+		usleep_range(1, 1);
 	}
 
 	/* Set to use the register calculated M/N video */
@@ -809,7 +986,7 @@ static int s5p_dp_config_video(struct s5p_dp_device *dp,
 			return -ETIMEDOUT;
 		}
 
-		mdelay(100);
+		usleep_range(1000, 1000);
 	}
 
 	if (retval != 0)
@@ -818,29 +995,42 @@ static int s5p_dp_config_video(struct s5p_dp_device *dp,
 	return retval;
 }
 
-static void s5p_dp_enable_scramble(struct s5p_dp_device *dp, bool enable)
+static int s5p_dp_enable_scramble(struct s5p_dp_device *dp, bool enable)
 {
 	u8 data;
+	int retval;
 
 	if (enable) {
 		s5p_dp_enable_scrambling(dp);
 
-		s5p_dp_read_byte_from_dpcd(dp,
-			DPCD_ADDR_TRAINING_PATTERN_SET,
-			&data);
-		s5p_dp_write_byte_to_dpcd(dp,
-			DPCD_ADDR_TRAINING_PATTERN_SET,
-			(u8)(data & ~DPCD_SCRAMBLING_DISABLED));
+		retval = s5p_dp_read_byte_from_dpcd(dp,
+				DPCD_ADDR_TRAINING_PATTERN_SET,
+				&data);
+		if (retval < 0)
+			return retval;
+
+		retval = s5p_dp_write_byte_to_dpcd(dp,
+				DPCD_ADDR_TRAINING_PATTERN_SET,
+				(u8)(data & ~DPCD_SCRAMBLING_DISABLED));
+		if (retval < 0)
+			return retval;
 	} else {
 		s5p_dp_disable_scrambling(dp);
 
-		s5p_dp_read_byte_from_dpcd(dp,
-			DPCD_ADDR_TRAINING_PATTERN_SET,
-			&data);
-		s5p_dp_write_byte_to_dpcd(dp,
-			DPCD_ADDR_TRAINING_PATTERN_SET,
-			(u8)(data | DPCD_SCRAMBLING_DISABLED));
+		retval = s5p_dp_read_byte_from_dpcd(dp,
+				DPCD_ADDR_TRAINING_PATTERN_SET,
+				&data);
+		if (retval < 0)
+			return retval;
+
+		retval = s5p_dp_write_byte_to_dpcd(dp,
+				DPCD_ADDR_TRAINING_PATTERN_SET,
+				(u8)(data | DPCD_SCRAMBLING_DISABLED));
+		if (retval < 0)
+			return retval;
 	}
+
+	return 0;
 }
 
 static irqreturn_t s5p_dp_irq_handler(int irq, void *arg)
@@ -851,75 +1041,153 @@ static irqreturn_t s5p_dp_irq_handler(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
-static void s5p_dp_early_suspend(struct early_suspend *handler)
+static int s5p_dp_enable(struct s5p_dp_device *dp)
 {
-	struct platform_device *pdev;
-	struct s5p_dp_platdata *pdata;
-	struct s5p_dp_device *dp;
+	int ret = 0;
+	int retry = 0;
+	struct s5p_dp_platdata *pdata = dp->dev->platform_data;
 
-	dp = container_of(handler, struct s5p_dp_device, early_suspend);
-	pdev = to_platform_device(dp->dev);
-	pdata = pdev->dev.platform_data;
+	mutex_lock(&dp->lock);
 
-	if (pdata->backlight_off)
-		pdata->backlight_off();
+	if (dp->enabled)
+		goto out;
 
-	if (pdata && pdata->phy_exit)
-		pdata->phy_exit();
-
-	clk_disable(dp->clock);
-
-	return;
-}
-
-static void s5p_dp_late_resume(struct early_suspend *handler)
-{
-	struct platform_device *pdev;
-	struct s5p_dp_platdata *pdata;
-	struct s5p_dp_device *dp;
-
-	dp = container_of(handler, struct s5p_dp_device, early_suspend);
-	pdev = to_platform_device(dp->dev);
-	pdata = pdev->dev.platform_data;
-
-	if (pdata && pdata->phy_init)
-		pdata->phy_init();
+	dp->enabled = 1;
 
 	clk_enable(dp->clock);
+	pm_runtime_get_sync(dp->dev);
+
+dp_phy_init:
+
+	if (pdata->phy_init)
+		pdata->phy_init();
 
 	s5p_dp_init_dp(dp);
 
 	if (!soc_is_exynos5250()) {
-		s5p_dp_detect_hpd(dp);
-		s5p_dp_handle_edid(dp);
+		ret = s5p_dp_detect_hpd(dp);
+		if (ret) {
+			dev_err(dp->dev, "unable to detect hpd\n");
+			goto out;
+		}
 	}
 
-	s5p_dp_set_link_train(dp, dp->video_info->lane_count,
+	ret = s5p_dp_handle_edid(dp);
+	if (ret) {
+		dev_err(dp->dev, "unable to handle edid\n");
+		goto out;
+	}
+
+	s5p_dp_disable_rx_zmux(dp);
+
+	/* Non-enhance mode setting */
+	ret = s5p_dp_enable_scramble(dp, 0);
+	if (ret) {
+		dev_err(dp->dev, "unable to set scramble\n");
+		goto out;
+	}
+
+	ret = s5p_dp_enable_rx_to_enhanced_mode(dp, 0);
+	if (ret) {
+		dev_err(dp->dev, "unable to set enhanced mode\n");
+		goto out;
+	}
+	s5p_dp_enable_enhanced_mode(dp, 0);
+
+	/* Rx data disable */
+	s5p_dp_rx_control(dp,0);
+
+       /* Link Training */
+	ret = s5p_dp_set_link_train(dp, dp->video_info->lane_count,
 				dp->video_info->link_rate);
-
-	if (soc_is_exynos5250()) {
-		s5p_dp_enable_scramble(dp, 1);
-		s5p_dp_enable_rx_to_enhanced_mode(dp, 1);
-		s5p_dp_enable_enhanced_mode(dp, 1);
-	} else {
-		s5p_dp_enable_scramble(dp, 0);
-		s5p_dp_enable_rx_to_enhanced_mode(dp, 0);
-		s5p_dp_enable_enhanced_mode(dp, 0);
+	if (ret) {
+		dev_err(dp->dev, "unable to do link train\n");
+		goto out;
 	}
+
+	/* Rx data enable */
+	s5p_dp_rx_control(dp,1);
 
 	s5p_dp_set_lane_count(dp, dp->video_info->lane_count);
 	s5p_dp_set_link_bandwidth(dp, dp->video_info->link_rate);
 
 	s5p_dp_init_video(dp);
-	s5p_dp_config_video(dp, dp->video_info);
+	ret = s5p_dp_config_video(dp, dp->video_info);
+	if (ret) {
+		dev_err(dp->dev, "unable to config video\n");
+		goto out;
+	}
 
 	if (pdata->backlight_on)
 		pdata->backlight_on();
 
-	return;
+	mutex_unlock(&dp->lock);
+	return 0;
+
+out:
+	if (pdata->phy_exit)
+		pdata->phy_exit();
+
+	if (retry < 3) {
+		if (pdata->lcd_off)
+			pdata->lcd_off();
+
+		if (pdata->lcd_on)
+			pdata->lcd_on();
+
+		retry++;
+		goto dp_phy_init;
+	}
+	dev_err(dp->dev, "DP LT exceeds max retry count");
+
+	mutex_unlock(&dp->lock);
+	return ret;
 }
-#endif
+
+static void s5p_dp_disable(struct s5p_dp_device *dp)
+{
+	struct s5p_dp_platdata *pdata = dp->dev->platform_data;
+
+	mutex_lock(&dp->lock);
+
+	if (!dp->enabled)
+		goto out;
+
+	dp->enabled = 0;
+
+	s5p_dp_reset(dp);
+	s5p_dp_set_pll_power_down(dp, 1);
+	s5p_dp_set_analog_power_down(dp, POWER_ALL, 1);
+
+	if (pdata && pdata->phy_exit)
+		pdata->phy_exit();
+
+	clk_disable(dp->clock);
+	pm_runtime_put_sync(dp->dev);
+
+out:
+	mutex_unlock(&dp->lock);
+}
+
+static int s5p_dp_set_power(struct lcd_device *lcd, int power)
+{
+	struct s5p_dp_device *dp = lcd_get_data(lcd);
+	int retval;
+
+	if (power == FB_BLANK_UNBLANK) {
+		retval = s5p_dp_enable(dp);
+		if (retval < 0)
+			return retval;
+	} else {
+		s5p_dp_disable(dp);
+	}
+
+	return 0;
+}
+
+struct lcd_ops s5p_dp_lcd_ops = {
+	.set_power = s5p_dp_set_power,
+};
 
 static int __devinit s5p_dp_probe(struct platform_device *pdev)
 {
@@ -941,6 +1209,8 @@ static int __devinit s5p_dp_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	mutex_init(&dp->lock);
+
 	dp->dev = &pdev->dev;
 
 	dp->clock = clk_get(&pdev->dev, "dp");
@@ -949,8 +1219,6 @@ static int __devinit s5p_dp_probe(struct platform_device *pdev)
 		ret = PTR_ERR(dp->clock);
 		goto err_dp;
 	}
-
-	clk_enable(dp->clock);
 
 	pm_runtime_enable(dp->dev);
 
@@ -978,9 +1246,6 @@ static int __devinit s5p_dp_probe(struct platform_device *pdev)
 		goto err_req_region;
 	}
 
-	pm_runtime_get_sync(dp->dev);
-
-#if 0 // to do check after wakeup
 	dp->irq = platform_get_irq(pdev, 0);
 	if (!dp->irq) {
 		dev_err(&pdev->dev, "failed to get irq\n");
@@ -994,63 +1259,25 @@ static int __devinit s5p_dp_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to request irq\n");
 		goto err_ioremap;
 	}
-#endif
+
 	dp->video_info = pdata->video_info;
-	if (pdata->phy_init)
-		pdata->phy_init();
-
-	s5p_dp_init_dp(dp);
-
-	if (!soc_is_exynos5250()) {
-		ret = s5p_dp_detect_hpd(dp);
-		if (ret) {
-			dev_err(&pdev->dev, "unable to detect hpd\n");
-			goto err_irq;
-		}
-
-		s5p_dp_handle_edid(dp);
-	}
-
-	ret = s5p_dp_set_link_train(dp, dp->video_info->lane_count,
-				dp->video_info->link_rate);
-	if (ret) {
-		dev_err(&pdev->dev, "unable to do link train\n");
-		goto err_irq;
-	}
-
-	if (soc_is_exynos5250()) {
-		s5p_dp_enable_scramble(dp, 1);
-		s5p_dp_enable_rx_to_enhanced_mode(dp, 1);
-		s5p_dp_enable_enhanced_mode(dp, 1);
-	} else {
-		s5p_dp_enable_scramble(dp, 0);
-		s5p_dp_enable_rx_to_enhanced_mode(dp, 0);
-		s5p_dp_enable_enhanced_mode(dp, 0);
-	}
-
-	s5p_dp_set_lane_count(dp, dp->video_info->lane_count);
-	s5p_dp_set_link_bandwidth(dp, dp->video_info->link_rate);
-
-	s5p_dp_init_video(dp);
-	ret = s5p_dp_config_video(dp, dp->video_info);
-	if (ret) {
-		dev_err(&pdev->dev, "unable to config video\n");
-		goto err_irq;
-	}
-
-	if (pdata->backlight_on)
-		pdata->backlight_on();
 
 	platform_set_drvdata(pdev, dp);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	dp->early_suspend.suspend = s5p_dp_early_suspend;
-	dp->early_suspend.resume = s5p_dp_late_resume;
-	dp->early_suspend.level = EARLY_SUSPEND_LEVEL_DISABLE_FB - 1;
-	register_early_suspend(&dp->early_suspend);
-#endif
+	dp->lcd = lcd_device_register("s5p_dp", &pdev->dev, dp, &s5p_dp_lcd_ops);
+	if (IS_ERR(dp->lcd)) {
+		ret = PTR_ERR(dp->lcd);
+		goto err_irq;
+	}
+
+	ret = s5p_dp_enable(dp);
+	if (ret)
+		goto err_fb;
+
 	return 0;
 
+err_fb:
+	lcd_device_unregister(dp->lcd);
 err_irq:
 	free_irq(dp->irq, dp);
 err_ioremap:
@@ -1060,6 +1287,7 @@ err_req_region:
 err_clock:
 	clk_put(dp->clock);
 err_dp:
+	mutex_destroy(&dp->lock);
 	kfree(dp);
 
 	return ret;
@@ -1067,28 +1295,19 @@ err_dp:
 
 static int __devexit s5p_dp_remove(struct platform_device *pdev)
 {
-	struct s5p_dp_platdata *pdata = pdev->dev.platform_data;
 	struct s5p_dp_device *dp = platform_get_drvdata(pdev);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	unregister_early_suspend(&dp->early_suspend);
-#endif
-
-	if (pdata->backlight_off)
-		pdata->backlight_off();
-
-	if (pdata && pdata->phy_exit)
-		pdata->phy_exit();
-
 	free_irq(dp->irq, dp);
-	iounmap(dp->reg_base);
 
-	clk_disable(dp->clock);
+	lcd_device_unregister(dp->lcd);
+
+	s5p_dp_disable(dp);
+
+	iounmap(dp->reg_base);
 	clk_put(dp->clock);
 
 	release_mem_region(dp->res->start, resource_size(dp->res));
 
-	pm_runtime_put_sync(dp->dev);
 	pm_runtime_disable(dp->dev);
 
 	kfree(dp);
@@ -1096,102 +1315,41 @@ static int __devexit s5p_dp_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-#ifndef CONFIG_HAS_EARLYSUSPEND
-static int s5p_dp_suspend(struct device *dev)
+static int  s5p_dp_shutdown(struct platform_device *pdev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct s5p_dp_platdata *pdata = pdev->dev.platform_data;
 	struct s5p_dp_device *dp = platform_get_drvdata(pdev);
+	struct s5p_dp_platdata *pdata = dp->dev->platform_data;
+
+	lcd_device_unregister(dp->lcd);
 
 	if (pdata->backlight_off)
 		pdata->backlight_off();
 
-	if (pdata && pdata->phy_exit)
-		pdata->phy_exit();
+	if (pdata->lcd_off)
+		pdata->lcd_off();
 
-	clk_disable(dp->clock);
-	pm_runtime_put_sync(dp->dev);
+	s5p_dp_disable(dp);
 
-	return 0;
-}
+	free_irq(dp->irq, dp);
+	iounmap(dp->reg_base);
+	clk_put(dp->clock);
 
-static int s5p_dp_resume(struct device *dev)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-	struct s5p_dp_platdata *pdata = pdev->dev.platform_data;
-	struct s5p_dp_device *dp = platform_get_drvdata(pdev);
+	release_mem_region(dp->res->start, resource_size(dp->res));
 
-	if (pdata && pdata->phy_init)
-		pdata->phy_init();
+	pm_runtime_disable(dp->dev);
 
-	pm_runtime_get_sync(dp->dev);
-	clk_enable(dp->clock);
-
-	s5p_dp_init_dp(dp);
-
-	if (!soc_is_exynos5250()) {
-		s5p_dp_detect_hpd(dp);
-		s5p_dp_handle_edid(dp);
-	}
-
-	s5p_dp_set_link_train(dp, dp->video_info->lane_count,
-				dp->video_info->link_rate);
-
-	if (soc_is_exynos5250()) {
-		s5p_dp_enable_scramble(dp, 1);
-		s5p_dp_enable_rx_to_enhanced_mode(dp, 1);
-		s5p_dp_enable_enhanced_mode(dp, 1);
-	} else {
-		s5p_dp_enable_scramble(dp, 0);
-		s5p_dp_enable_rx_to_enhanced_mode(dp, 0);
-		s5p_dp_enable_enhanced_mode(dp, 0);
-	}
-
-	s5p_dp_set_lane_count(dp, dp->video_info->lane_count);
-	s5p_dp_set_link_bandwidth(dp, dp->video_info->link_rate);
-
-	s5p_dp_init_video(dp);
-	s5p_dp_config_video(dp, dp->video_info);
-
-	if (pdata->backlight_on)
-		pdata->backlight_on();
+	kfree(dp);
 
 	return 0;
 }
-#endif
-static int s5p_dp_runtime_suspend(struct device *dev)
-{
-	return 0;
-}
-
-static int s5p_dp_runtime_resume(struct device *dev)
-{
-	return 0;
-}
-#else
-#define s5p_dp_suspend NULL
-#define s5p_dp_resume NULL
-#define s5p_dp_runtime_suspend NULL
-#define s5p_dp_runtime_resume NULL
-#endif
-
-static const struct dev_pm_ops s5p_dp_pm_ops = {
-#ifndef CONFIG_HAS_EARLYSUSPEND
-	.suspend		= s5p_dp_suspend,
-	.resume			= s5p_dp_resume,
-#endif
-	.runtime_suspend	= s5p_dp_runtime_suspend,
-	.runtime_resume		= s5p_dp_runtime_resume,
-};
 
 static struct platform_driver s5p_dp_driver = {
 	.probe		= s5p_dp_probe,
 	.remove		= __devexit_p(s5p_dp_remove),
+	.shutdown       = s5p_dp_shutdown,
 	.driver		= {
 		.name	= "s5p-dp",
 		.owner	= THIS_MODULE,
-		.pm	= &s5p_dp_pm_ops,
 	},
 };
 

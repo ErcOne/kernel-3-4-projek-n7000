@@ -195,13 +195,32 @@ static int nilfs_writepage(struct page *page, struct writeback_control *wbc)
 
 static int nilfs_set_page_dirty(struct page *page)
 {
-	int ret = __set_page_dirty_buffers(page);
+	int ret = __set_page_dirty_nobuffers(page);
 
-	if (ret) {
+	if (page_has_buffers(page)) {
 		struct inode *inode = page->mapping->host;
-		unsigned nr_dirty = 1 << (PAGE_SHIFT - inode->i_blkbits);
+		unsigned nr_dirty = 0;
+		struct buffer_head *bh, *head;
 
-		nilfs_set_file_dirty(inode, nr_dirty);
+		/*
+		 * This page is locked by callers, and no other thread
+		 * concurrently marks its buffers dirty since they are
+		 * only dirtied through routines in fs/buffer.c in
+		 * which call sites of mark_buffer_dirty are protected
+		 * by page lock.
+		 */
+		bh = head = page_buffers(page);
+		do {
+			/* Do not mark hole blocks dirty */
+			if (buffer_dirty(bh) || !buffer_mapped(bh))
+				continue;
+
+			set_buffer_dirty(bh);
+			nr_dirty++;
+		} while (bh = bh->b_this_page, bh != head);
+
+		if (nr_dirty)
+			nilfs_set_file_dirty(inode, nr_dirty);
 	}
 	return ret;
 }
@@ -259,8 +278,8 @@ nilfs_direct_IO(int rw, struct kiocb *iocb, const struct iovec *iov,
 		return 0;
 
 	/* Needs synchronization with the cleaner */
-	size = blockdev_direct_IO(rw, iocb, inode, inode->i_sb->s_bdev, iov,
-				  offset, nr_segs, nilfs_get_block, NULL);
+	size = blockdev_direct_IO(rw, iocb, inode, iov, offset, nr_segs,
+				  nilfs_get_block);
 
 	/*
 	 * In case of error extending write may have instantiated a few
@@ -291,7 +310,7 @@ const struct address_space_operations nilfs_aops = {
 	.is_partially_uptodate  = block_is_partially_uptodate,
 };
 
-struct inode *nilfs_new_inode(struct inode *dir, int mode)
+struct inode *nilfs_new_inode(struct inode *dir, umode_t mode)
 {
 	struct super_block *sb = dir->i_sb;
 	struct the_nilfs *nilfs = sb->s_fs_info;
@@ -354,7 +373,7 @@ struct inode *nilfs_new_inode(struct inode *dir, int mode)
 
  failed_acl:
  failed_bmap:
-	inode->i_nlink = 0;
+	clear_nlink(inode);
 	iput(inode);  /* raw_inode will be deleted through
 			 generic_delete_inode() */
 	goto failed;
@@ -396,7 +415,7 @@ int nilfs_read_inode_common(struct inode *inode,
 	inode->i_mode = le16_to_cpu(raw_inode->i_mode);
 	inode->i_uid = (uid_t)le32_to_cpu(raw_inode->i_uid);
 	inode->i_gid = (gid_t)le32_to_cpu(raw_inode->i_gid);
-	inode->i_nlink = le16_to_cpu(raw_inode->i_links_count);
+	set_nlink(inode, le16_to_cpu(raw_inode->i_links_count));
 	inode->i_size = le64_to_cpu(raw_inode->i_size);
 	inode->i_atime.tv_sec = le64_to_cpu(raw_inode->i_mtime);
 	inode->i_ctime.tv_sec = le64_to_cpu(raw_inode->i_ctime);
@@ -778,6 +797,8 @@ int nilfs_setattr(struct dentry *dentry, struct iattr *iattr)
 
 	if ((iattr->ia_valid & ATTR_SIZE) &&
 	    iattr->ia_size != i_size_read(inode)) {
+		inode_dio_wait(inode);
+
 		err = vmtruncate(inode, iattr->ia_size);
 		if (unlikely(err))
 			goto out_err;
@@ -799,14 +820,14 @@ out_err:
 	return err;
 }
 
-int nilfs_permission(struct inode *inode, int mask, unsigned int flags)
+int nilfs_permission(struct inode *inode, int mask)
 {
 	struct nilfs_root *root = NILFS_I(inode)->i_root;
 	if ((mask & MAY_WRITE) && root &&
 	    root->cno != NILFS_CPTREE_CURRENT_CNO)
 		return -EROFS; /* snapshot is not writable */
 
-	return generic_permission(inode, mask, flags, NULL);
+	return generic_permission(inode, mask);
 }
 
 int nilfs_load_inode_block(struct inode *inode, struct buffer_head **pbh)

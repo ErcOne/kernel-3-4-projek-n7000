@@ -472,7 +472,7 @@ static int vmw_driver_load(struct drm_device *dev, unsigned long chipset)
 	svga_id = vmw_read(dev_priv, SVGA_REG_ID);
 	if (svga_id != SVGA_ID_2) {
 		ret = -ENOSYS;
-		DRM_ERROR("Unsuported SVGA ID 0x%x\n", svga_id);
+		DRM_ERROR("Unsupported SVGA ID 0x%x\n", svga_id);
 		mutex_unlock(&dev_priv->hw_mutex);
 		goto out_err0;
 	}
@@ -1164,6 +1164,11 @@ static struct drm_driver driver = {
 	.open = vmw_driver_open,
 	.preclose = vmw_preclose,
 	.postclose = vmw_postclose,
+
+	.dumb_create = vmw_dumb_create,
+	.dumb_map_offset = vmw_dumb_map_offset,
+	.dumb_destroy = vmw_dumb_destroy,
+
 	.fops = &vmwgfx_driver_fops,
 	.name = VMWGFX_DRIVER_NAME,
 	.desc = VMWGFX_DRIVER_DESC,

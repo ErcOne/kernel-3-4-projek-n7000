@@ -25,17 +25,13 @@
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/gpio.h>
-#include <linux/slab.h>
+#include <linux/mfd/max77686.h>
+#include <linux/mfd/max77686-private.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
-#include <linux/mfd/max77686.h>
-#include <linux/mfd/max77686-private.h>
-
-//#define MAX77686_DEBUG
-
-#define PMIC_DEBUG KERN_DEBUG
-#define PMIC_REG_DEBUG KERN_DEBUG
+#include <linux/slab.h>
 
 #define MAX77686_OPMODE_SHIFT 6
 #define MAX77686_OPMODE_BUCK234_SHIFT 4
@@ -43,9 +39,17 @@
 
 #define MAX77686_DVS_VOL_COMP 50000
 
-enum MAX77686_DEVICE_ID {
-	MAX77686_DEVICE_PASS1 = 0x1,
-	MAX77686_DEVICE_PASS2 = 0x2,
+#define MAX77686_CHIPREV_MASK		0x7
+#define MAX77686_VERSION_MASK		0x78
+
+enum MAX77686_CHIPREV {
+	CHIPREV_MAX77686_PASS1 = 0x1,
+	CHIPREV_MAX77686_PASS2 = 0x2,
+};
+
+enum MAX77686_VERSION {
+	VERSION_MAX77686,
+	VERSION_MAX77686A,
 };
 
 struct max77686_data {
@@ -54,7 +58,8 @@ struct max77686_data {
 	int num_regulators;
 	struct regulator_dev **rdev;
 	int ramp_delay; /* in mV/us */
-	int device_id;
+	u8 version;
+	u8 chip_rev;
 
 	struct max77686_opmode_data *opmode_data;
 
@@ -65,7 +70,9 @@ struct max77686_data {
 	u8 buck3_vol[8];
 	u8 buck4_vol[8];
 	int buck234_gpios_dvs[3];
+	char *buck234_gpios_dvs_label[3];
 	int buck234_gpios_selb[3];
+	char *buck234_gpios_selb_label[3];
 	int buck234_gpioindex;
 	bool ignore_gpiodvs_side_effect;
 
@@ -94,26 +101,31 @@ struct voltage_map_desc {
 };
 
 /* LDO3 ~ 5, 9 ~ 14, 16 ~ 26 (uV) */
-static const struct voltage_map_desc ldo_voltage_map_desc = {
+static struct voltage_map_desc ldo_voltage_map_desc = {
 	.min = 800000,	.max = 3950000,	.step = 50000,	.n_bits = 6,
 };
 
 /* LDO1 ~ 2, 6 ~ 8, 15 (uV) */
-static const struct voltage_map_desc ldo_low_voltage_map_desc = {
+static struct voltage_map_desc ldo_low_voltage_map_desc = {
 	.min = 800000,	.max = 2375000,	.step = 25000,	.n_bits = 6,
 };
 
 /* Buck2, 3, 4 (uV) */
-static const struct voltage_map_desc buck_dvs_voltage_map_desc = {
+static struct voltage_map_desc buck_dvs_voltage_map_desc = {
 	.min = 600000,	.max = 3787500,	.step = 12500,	.n_bits = 8,
 };
 
 /* Buck1, 5 ~ 9 (uV) */
-static const struct voltage_map_desc buck_voltage_map_desc = {
+static struct voltage_map_desc buck_voltage_map_desc = {
 	.min = 750000,	.max = 3900000,	.step = 50000,	.n_bits = 6,
 };
 
-static const struct voltage_map_desc *reg_voltage_map[] = {
+/* Buck1 (uV) for MAX77686A */
+static struct voltage_map_desc buck1_voltage_map_desc = {
+	.min = 750000,	.max = 1537500,	.step = 12500,	.n_bits = 6,
+};
+
+static struct voltage_map_desc *reg_voltage_map[] = {
 	[MAX77686_LDO1] = &ldo_low_voltage_map_desc,
 	[MAX77686_LDO2] = &ldo_low_voltage_map_desc,
 	[MAX77686_LDO3] = &ldo_voltage_map_desc,
@@ -252,7 +264,8 @@ static int max77686_get_enable_register(struct regulator_dev *rdev,
 	case MAX77686_LDO1 ... MAX77686_LDO26:
 		*reg = MAX77686_REG_LDO1CTRL1 + (rid - MAX77686_LDO1);
 		*mask = MAX77686_OPMODE_MASK << MAX77686_OPMODE_SHIFT;
-		*pattern = max77686_opmode_reg[rid][mode] << MAX77686_OPMODE_SHIFT;
+		*pattern = max77686_opmode_reg[rid][mode]
+				<< MAX77686_OPMODE_SHIFT;
 		break;
 	case MAX77686_BUCK1:
 		*reg = MAX77686_REG_BUCK1CTRL;
@@ -264,7 +277,8 @@ static int max77686_get_enable_register(struct regulator_dev *rdev,
 	case MAX77686_BUCK4:
 		*reg = MAX77686_REG_BUCK2CTRL1 + (rid - MAX77686_BUCK2)*10;
 		*mask = MAX77686_OPMODE_MASK << MAX77686_OPMODE_BUCK234_SHIFT;
-		*pattern = max77686_opmode_reg[rid][mode] << MAX77686_OPMODE_BUCK234_SHIFT;
+		*pattern = max77686_opmode_reg[rid][mode]
+				<< MAX77686_OPMODE_BUCK234_SHIFT;
 		break;
 	case MAX77686_BUCK5 ... MAX77686_BUCK9:
 		*reg = MAX77686_REG_BUCK5CTRL + (rid - MAX77686_BUCK5) * 2;
@@ -318,10 +332,8 @@ static int max77686_reg_enable(struct regulator_dev *rdev)
 	if (ret)
 		return ret;
 
-#ifdef MAX77686_DEBUG
-	printk(PMIC_DEBUG "%s: id=%d, pattern=%x\n",
-		__func__, rdev_get_id(rdev), pattern);
-#endif
+	pr_debug("%s: id=%d, reg=%x, mask=%x, pattern=%x\n",
+		__func__, rdev_get_id(rdev), reg, mask, pattern);
 
 	return max77686_update_reg(i2c, reg, pattern, mask);
 }
@@ -336,10 +348,8 @@ static int max77686_reg_disable(struct regulator_dev *rdev)
 	if (ret)
 		return ret;
 
-#ifdef MAX77686_DEBUG
-	printk(PMIC_DEBUG "%s: id=%d, pattern=%x\n",
-		__func__, rdev_get_id(rdev), pattern);
-#endif
+	pr_debug("%s: id=%d, reg=%x, mask=%x, pattern=%x\n",
+		__func__, rdev_get_id(rdev), reg, mask, pattern);
 
 	return max77686_update_reg(i2c, reg, ~mask, mask);
 }
@@ -358,15 +368,15 @@ static int max77686_get_voltage_register(struct regulator_dev *rdev,
 		reg = MAX77686_REG_BUCK1OUT;
 		break;
 	case MAX77686_BUCK2:
-		reg = MAX77686_REG_BUCK2DVS2;
+		reg = MAX77686_REG_BUCK2DVS1;
 		mask = 0xff;
 		break;
 	case MAX77686_BUCK3:
-		reg = MAX77686_REG_BUCK3DVS2;
+		reg = MAX77686_REG_BUCK3DVS1;
 		mask = 0xff;
 		break;
 	case MAX77686_BUCK4:
-		reg = MAX77686_REG_BUCK4DVS2;
+		reg = MAX77686_REG_BUCK4DVS1;
 		mask = 0xff;
 		break;
 	case MAX77686_BUCK5 ... MAX77686_BUCK9:
@@ -407,10 +417,8 @@ static int max77686_get_voltage(struct regulator_dev *rdev)
 	val >>= shift;
 	val &= mask;
 
-#ifdef MAX77686_DEBUG
-	printk(PMIC_REG_DEBUG "%s: id=%d, val=%x\n",
-		__func__, rid, val);
-#endif
+	pr_debug("%s: id=%d, reg=%x, mask=%x, val=%x\n",
+		__func__, rid, reg, mask, val);
 
 	return max77686_list_voltage(rdev, val);
 }
@@ -454,7 +462,8 @@ static int max77686_set_voltage(struct regulator_dev *rdev,
 	desc = reg_voltage_map[rid];
 
 	/* W/A code about voltage drop of PASS1 */
-	if (max77686->device_id <= MAX77686_DEVICE_PASS1) {
+	if (max77686->version < VERSION_MAX77686A &&
+			max77686->chip_rev <= CHIPREV_MAX77686_PASS1) {
 		if (rid >= MAX77686_BUCK1 && rid <= MAX77686_BUCK4) {
 			min_uV = min_uV + MAX77686_DVS_VOL_COMP;
 			max_uV = max_uV + MAX77686_DVS_VOL_COMP;
@@ -474,23 +483,9 @@ static int max77686_set_voltage(struct regulator_dev *rdev,
 	max77686_read_reg(i2c, reg, &org);
 	org = (org & mask) >> shift;
 
-#if defined(CONFIG_MACH_M0) || defined(CONFIG_MACH_C1) || \
-	defined(CONFIG_MACH_M3) || \
-	defined(CONFIG_MACH_P4NOTE) || \
-	defined(CONFIG_MACH_GC1) || defined(CONFIG_MACH_T0) || \
-	defined(CONFIG_MACH_GRANDE) || defined(CONFIG_MACH_IRON)
-#if !defined(CONFIG_MACH_T0_CHN_CU_DUOS) || \
-	!defined(CONFIG_MACH_T0_CHN_CMCC) || \
-	!defined(CONFIG_MACH_T0_CHN_OPEN_DUOS) || \
-	!defined(CONFIG_MACH_T0_CHN_CTC)
-	/* Test code for HDMI debug */
-	if (!gpio_get_value(GPIO_HDMI_EN))
-#endif
-#endif
-#ifdef MAX77686_DEBUG
-		printk(PMIC_REG_DEBUG "max77686: id=%d, org=%x, val=%x",
-			rdev_get_id(rdev), org, i);
-#endif
+	pr_debug("%s: id=%d, reg=%x, mask=%x, org=%x, val=%x\n",
+		__func__, rdev_get_id(rdev), reg, mask, org, i);
+
 	ret = max77686_update_reg(i2c, reg, i << shift, mask << shift);
 	*selector = i;
 
@@ -649,15 +644,37 @@ static int max77686_set_ramp_rate(struct i2c_client *i2c, int rate)
 		break;
 	}
 
-#ifdef MAX77686_DEBUG
-	printk(PMIC_DEBUG "%s: ramp_delay=%d, data=0x%x\n", __func__, ramp_delay, data);
-#endif
+	pr_debug("%s: ramp_delay=%d, data=0x%x\n", __func__,
+			ramp_delay, data);
 
 	max77686_update_reg(i2c, MAX77686_REG_BUCK2CTRL1, data, 0xC0);
 	max77686_update_reg(i2c, MAX77686_REG_BUCK3CTRL1, data, 0xC0);
 	max77686_update_reg(i2c, MAX77686_REG_BUCK4CTRL1, data, 0xC0);
 
 	return ramp_delay;
+}
+
+static __devinit void max77686_show_pwron_src(struct max77686_data *max77686)
+{
+	const char *src[] = {
+		"PWRON=High", "JIGONB=Low", "ACOKB=Low", "Manual Reset Event",
+		"ALARM1", "ALARM2", "SMPL Event", "WTSR Event"
+	};
+	struct i2c_client *i2c = max77686->iodev->i2c;
+	int i, ret;
+	u8 data = 0;
+
+	ret = max77686_read_reg(i2c, MAX77686_REG_PWRON, &data);
+	if (ret < 0) {
+		dev_err(max77686->dev, "%s: fail to read PWRON reg(%d)\n",
+				__func__, ret);
+		return;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(src); i++)
+		if (data & 1 << i)
+			dev_info(max77686->dev, "Power on triggered by %s\n",
+					src[i]);
 }
 
 static __devinit int max77686_pmic_probe(struct platform_device *pdev)
@@ -667,10 +684,10 @@ static __devinit int max77686_pmic_probe(struct platform_device *pdev)
 	struct regulator_dev **rdev;
 	struct max77686_data *max77686;
 	struct i2c_client *i2c;
-	int i, ret, size, err;
+	int i, ret, size;
 	u8 data = 0;
 
-	printk(PMIC_DEBUG "%s\n", __func__);
+	pr_debug("%s\n", __func__);
 
 	if (!pdata) {
 		dev_err(pdev->dev.parent, "No platform init data supplied.\n");
@@ -699,8 +716,13 @@ static __devinit int max77686_pmic_probe(struct platform_device *pdev)
 	max77686->ramp_delay = max77686_set_ramp_rate(i2c, pdata->ramp_rate);
 
 	max77686_read_reg(i2c, MAX77686_REG_DEVICE_ID, &data);
-	max77686->device_id = (data & 0x7);
-	printk(PMIC_DEBUG "%s: DEVICE ID=0x%x\n", __func__, data);
+	max77686->version =
+		(data & MAX77686_VERSION_MASK) >> __ffs(MAX77686_VERSION_MASK);
+	max77686->chip_rev = data & MAX77686_CHIPREV_MASK;
+	pr_info("%s: Device ID=0x%02x, (version:%d, chip_rev:%d)\n", __func__,
+			data, max77686->version, max77686->chip_rev);
+
+	max77686_show_pwron_src(max77686);
 
 	/*
 	 * TODO
@@ -711,40 +733,30 @@ static __devinit int max77686_pmic_probe(struct platform_device *pdev)
 	max77686->buck3_gpiodvs = false;
 	max77686->buck4_gpiodvs = false;
 	for (i = 0; i < 3; i++) {
-		char buf[80];
-
-		sprintf(buf, "MAX77686 DVS%d", i);
-
-		if (gpio_is_valid(pdata->buck234_gpio_dvs[i].gpio)) {
+		if (gpio_is_valid(pdata->buck234_gpio_dvs[i])) {
+			max77686->buck234_gpios_dvs_label[i] =
+				kasprintf(GFP_KERNEL, "MAX77686 DVS%d", i);
 			max77686->buck234_gpios_dvs[i] =
-				pdata->buck234_gpio_dvs[i].gpio;
-			err = gpio_request(
-				pdata->buck234_gpio_dvs[i].gpio, buf);
-			if (err)
-				pr_warn(
-				"failed to request MAX77686 DVS%d\n", i);
-			gpio_direction_output(pdata->buck234_gpio_dvs[i].gpio,
-				pdata->buck234_gpio_dvs[i].data);
+				pdata->buck234_gpio_dvs[i];
+			gpio_request(pdata->buck234_gpio_dvs[i],
+				max77686->buck234_gpios_dvs_label[i]);
+			gpio_direction_output(pdata->buck234_gpio_dvs[i], 0);
 		} else {
-			dev_info(&pdev->dev, "GPIO %s ignored (%d)\n",
-				 buf, pdata->buck234_gpio_dvs[i].gpio);
+			dev_info(&pdev->dev, "GPIO MAX77686 DVS%d ignored (%d)\n",
+				 i, pdata->buck234_gpio_dvs[i]);
 		}
 
-		sprintf(buf, "MAX77686 SELB%d", i);
-
 		if (gpio_is_valid(pdata->buck234_gpio_selb[i])) {
-			int data = (max77686->device_id <= MAX77686_DEVICE_PASS1) ? 1 : 0;
+			max77686->buck234_gpios_selb_label[i] =
+				kasprintf(GFP_KERNEL, "MAX77686 SELB%d", i);
 			max77686->buck234_gpios_selb[i] =
 				pdata->buck234_gpio_selb[i];
-			err = gpio_request(
-				pdata->buck234_gpio_selb[i], buf);
-			if (err)
-				pr_warn(
-				"failed to request MAX77686 SELB%d\n", i);
-			gpio_direction_output(pdata->buck234_gpio_selb[i], data);
+			gpio_request(pdata->buck234_gpio_selb[i],
+				max77686->buck234_gpios_selb_label[i]);
+			gpio_direction_output(pdata->buck234_gpio_selb[i], 0);
 		} else {
-			dev_info(&pdev->dev, "GPIO %s ignored (%d)\n",
-				 buf, pdata->buck234_gpio_selb[i]);
+			dev_info(&pdev->dev, "GPIO MAX77686 SELB%d ignored (%d)\n",
+				 i, pdata->buck234_gpio_selb[i]);
 		}
 	}
 	max77686->buck234_gpioindex = 0;
@@ -793,6 +805,9 @@ static __devinit int max77686_pmic_probe(struct platform_device *pdev)
 	if (pdata->has_full_constraints)
 		regulator_has_full_constraints();
 
+	if (max77686->version > VERSION_MAX77686)
+		reg_voltage_map[MAX77686_BUCK1] = &buck1_voltage_map_desc;
+
 	for (i = 0; i < pdata->num_regulators; i++) {
 		const struct voltage_map_desc *desc;
 		int id = pdata->regulators[i].id;
@@ -802,15 +817,14 @@ static __devinit int max77686_pmic_probe(struct platform_device *pdev)
 			regulators[id].n_voltages =
 				(desc->max - desc->min) / desc->step + 1;
 
-#ifdef MAX77686_DEBUG
-			printk(PMIC_DEBUG "%s: desc=%p, id=%d, n_vol=%d, max=%d, min=%d, step=%d\n",
-					__func__, desc, id, regulators[id].n_voltages,
+			pr_debug("%s: desc=%p, id=%d, n_vol=%d, "
+					"max=%d, min=%d, step=%d\n", __func__,
+					desc, id, regulators[id].n_voltages,
 					desc->max, desc->min, desc->step);
-#endif
 		}
 
 		rdev[i] = regulator_register(&regulators[id], max77686->dev,
-				pdata->regulators[i].initdata, max77686);
+				pdata->regulators[i].initdata, max77686, NULL);
 		if (IS_ERR(rdev[i])) {
 			ret = PTR_ERR(rdev[i]);
 			dev_err(max77686->dev, "regulator init failed for %d\n",
@@ -827,6 +841,8 @@ err:
 			gpio_free(max77686->buck234_gpios_dvs[i]);
 		if (max77686->buck234_gpios_dvs[i])
 			gpio_free(max77686->buck234_gpios_selb[i]);
+		kfree(max77686->buck234_gpios_dvs_label[i]);
+		kfree(max77686->buck234_gpios_selb_label[i]);
 	}
 
 	for (i = 0; i < max77686->num_regulators; i++)
@@ -850,6 +866,8 @@ static int __devexit max77686_pmic_remove(struct platform_device *pdev)
 			gpio_free(max77686->buck234_gpios_dvs[i]);
 		if (max77686->buck234_gpios_dvs[i])
 			gpio_free(max77686->buck234_gpios_selb[i]);
+		kfree(max77686->buck234_gpios_dvs_label[i]);
+		kfree(max77686->buck234_gpios_selb_label[i]);
 	}
 
 	for (i = 0; i < max77686->num_regulators; i++)
@@ -880,15 +898,11 @@ static struct platform_driver max77686_pmic_driver = {
 
 static int __init max77686_pmic_init(void)
 {
-	printk(PMIC_DEBUG "%s\n", __func__);
+	pr_debug("%s\n", __func__);
 
 	return platform_driver_register(&max77686_pmic_driver);
 }
-#ifdef CONFIG_FAST_RESUME
-beforeresume_initcall(max77686_pmic_init);
-#else
 subsys_initcall(max77686_pmic_init);
-#endif
 
 static void __exit max77686_pmic_cleanup(void)
 {

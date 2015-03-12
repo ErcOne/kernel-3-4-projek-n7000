@@ -1,3 +1,12 @@
+/**
+ * MobiCore KernelApi module
+ *
+ * <!-- Copyright Giesecke & Devrient GmbH 2009-2012 -->
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
 #include <linux/module.h>
 #include <linux/init.h>
 
@@ -8,51 +17,45 @@
 #include <net/net_namespace.h>
 #include <linux/list.h>
 
-//TODO: this should be included from their own repos
-#include "public/MobiCoreDriverApi.h"
-#include "public/MobiCoreDriverCmd.h"
+#include "public/mobicore_driver_api.h"
+#include "public/mobicore_driver_cmd.h"
+#include "include/mcinq.h"
 #include "device.h"
 #include "session.h"
 
 /* device list */
 LIST_HEAD(devices);
 
-//------------------------------------------------------------------------------
-static mcore_device_t *resolveDeviceId(
-    uint32_t deviceId
+static struct mcore_device_t *resolve_device_id(
+	uint32_t device_id
 ) {
-	mcore_device_t *tmp;
+	struct mcore_device_t *tmp;
 	struct list_head *pos;
 
-	// Get mcore_device_t for deviceId
+	/* Get mcore_device_t for device_id */
 	list_for_each(pos, &devices) {
-		tmp=list_entry(pos, mcore_device_t, list);
-		if (tmp->deviceId == deviceId) {
+		tmp = list_entry(pos, struct mcore_device_t, list);
+		if (tmp->device_id == device_id)
 			return tmp;
-		}
 	}
 	return NULL;
 }
 
-
-//------------------------------------------------------------------------------
-static void addDevice(
-    mcore_device_t *device
+static void add_device(
+	struct mcore_device_t *device
 ) {
 	list_add_tail(&(device->list), &devices);
 }
 
-
-//------------------------------------------------------------------------------
-static bool removeDevice(
-    uint32_t deviceId
+static bool remove_device(
+	uint32_t device_id
 ) {
-	mcore_device_t *tmp;
+	struct mcore_device_t *tmp;
 	struct list_head *pos, *q;
 
 	list_for_each_safe(pos, q, &devices) {
-		tmp=list_entry(pos, mcore_device_t, list);
-		if (tmp->deviceId == deviceId) {
+		tmp = list_entry(pos, struct mcore_device_t, list);
+		if (tmp->device_id == device_id) {
 			list_del(pos);
 			mcore_device_cleanup(tmp);
 			return true;
@@ -61,1073 +64,1022 @@ static bool removeDevice(
 	return false;
 }
 
-
-//------------------------------------------------------------------------------
-mcResult_t mcOpenDevice(
-    uint32_t deviceId
+enum mc_result mc_open_device(
+	uint32_t device_id
 ) {
-	mcResult_t mcResult = MC_DRV_OK;
-	connection_t *devCon = NULL;
-	//static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	enum mc_result mc_result = MC_DRV_OK;
+	struct connection *dev_con = NULL;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	//pthread_mutex_lock(&mutex); // Enter critical section
+	/* Enter critical section */
 
-	do
-	{
-		mcore_device_t *device = resolveDeviceId(deviceId);
-		if (NULL != device)
-		{
-			MCDRV_DBG_ERROR("Device %d already opened", deviceId);
-			mcResult = MC_DRV_ERR_INVALID_OPERATION;
+	do {
+		struct mcore_device_t *device = resolve_device_id(device_id);
+		if (device != NULL) {
+			MCDRV_DBG_ERROR("Device %d already opened", device_id);
+			mc_result = MC_DRV_ERR_INVALID_OPERATION;
 			break;
 		}
 
-		// Open new connection to device
-		devCon = connection_new();
-		if (!connection_connect(devCon, MC_DAEMON_PID))
-		{
-			MCDRV_DBG_ERROR("Could not setup netlink connection to PID %u",
-							MC_DAEMON_PID);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		/* Open new connection to device */
+		dev_con = connection_new();
+		if (!connection_connect(dev_con, MC_DAEMON_PID)) {
+			MCDRV_DBG_ERROR(
+				"Could not setup netlink connection to PID %u",
+				MC_DAEMON_PID);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		// Forward device open to the daemon and read result
-		mcDrvCmdOpenDevice_t mcDrvCmdOpenDevice = {
-			// C++ does not support C99 designated initializers
+		/* Forward device open to the daemon and read result */
+		struct mc_drv_cmd_open_device_t mc_drv_cmd_open_device = {
+			/* C++ does not support C99 designated initializers */
 			/* .header = */ {
-				/* .commandId = */ MC_DRV_CMD_OPEN_DEVICE
+			/* .command_id = */ MC_DRV_CMD_OPEN_DEVICE
 			},
 		/* .payload = */ {
-			/* .deviceId = */ deviceId
+		/* .device_id = */ device_id
 			}
 		};
 
-		int len = connection_writeData(
-						devCon,
-						&mcDrvCmdOpenDevice,
-						sizeof(mcDrvCmdOpenDevice));
-		if (len < 0)
-		{
-			MCDRV_DBG_ERROR("CMD_OPEN_DEVICE writeCmd failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		int len = connection_write_data(
+				dev_con,
+				&mc_drv_cmd_open_device,
+				sizeof(struct mc_drv_cmd_open_device_t));
+		if (len < 0) {
+			MCDRV_DBG_ERROR("CMD_OPEN_DEVICE writeCmd failed "
+				"ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		mcDrvResponseHeader_t  rspHeader;
-		len = connection_readDataBlock(
-					devCon,
-					&rspHeader,
-					sizeof(rspHeader));
-		if (len != sizeof(rspHeader))
-		{
-			MCDRV_DBG_ERROR("CMD_OPEN_DEVICE readRsp failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		struct mc_drv_response_header_t  rsp_header;
+		len = connection_read_datablock(
+					dev_con,
+					&rsp_header,
+					sizeof(rsp_header));
+		if (len != sizeof(rsp_header)) {
+			MCDRV_DBG_ERROR("CMD_OPEN_DEVICE readRsp failed "
+				"ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
-		if (MC_DRV_RSP_OK != rspHeader.responseId)
-		{
+		if (rsp_header.response_id != MC_DRV_RSP_OK) {
 			MCDRV_DBG_ERROR("CMD_OPEN_DEVICE failed, respId=%d",
-							rspHeader.responseId);
-			switch(rspHeader.responseId)
-			{
+							rsp_header.response_id);
+			switch (rsp_header.response_id) {
 			case MC_DRV_RSP_PAYLOAD_LENGTH_ERROR:
-				mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+				mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 				break;
 			case MC_DRV_INVALID_DEVICE_NAME:
-				mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+				mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 				break;
 			case MC_DRV_RSP_DEVICE_ALREADY_OPENED:
 			default:
-				mcResult = MC_DRV_ERR_INVALID_OPERATION;
+				mc_result = MC_DRV_ERR_INVALID_OPERATION;
 				break;
 			}
 			break;
 		}
 
-		// there is no payload to read
+		/* there is no payload to read */
 
-		device = mcore_device_create(deviceId, devCon);
-		if (!mcore_device_open(device, MC_DRV_MOD_DEVNODE_FULLPATH))
-		{
+		device = mcore_device_create(device_id, dev_con);
+		if (!mcore_device_open(device, MC_DRV_MOD_DEVNODE_FULLPATH)) {
 			mcore_device_cleanup(device);
 			MCDRV_DBG_ERROR("could not open device file: %s",
-							MC_DRV_MOD_DEVNODE_FULLPATH);
-			mcResult = MC_DRV_ERR_INVALID_DEVICE_FILE;
+				MC_DRV_MOD_DEVNODE_FULLPATH);
+			mc_result = MC_DRV_ERR_INVALID_DEVICE_FILE;
 			break;
 		}
 
-		addDevice(device);
+		add_device(device);
 
 	} while (false);
 
-	if (mcResult != MC_DRV_OK)
-	{
-		connection_cleanup(devCon);
-	}
+	if (mc_result != MC_DRV_OK)
+		connection_cleanup(dev_con);
 
-	//pthread_mutex_unlock(&mutex); // Exit critical section
+	/* Exit critical section */
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcOpenDevice);
+EXPORT_SYMBOL(mc_open_device);
 
-//------------------------------------------------------------------------------
-mcResult_t mcCloseDevice(
-    uint32_t deviceId
+enum mc_result mc_close_device(
+	uint32_t device_id
 ) {
-	mcResult_t mcResult = MC_DRV_OK;
-	//static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	enum mc_result mc_result = MC_DRV_OK;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	//pthread_mutex_lock(&mutex); // Enter critical section
-	do
-	{
-		mcore_device_t *device = resolveDeviceId(deviceId);
-		if (NULL == device)
-		{
+	/* Enter critical section */
+	do {
+		struct mcore_device_t *device = resolve_device_id(device_id);
+		if (device == NULL) {
 			MCDRV_DBG_ERROR("Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
-		connection_t *devCon = device->connection;
+		struct connection *dev_con = device->connection;
 
-		// Return if not all sessions have been closed
-		if (mcore_device_hasSessions(device))
-		{
-			MCDRV_DBG_ERROR("cannot close with sessions still pending");
-			mcResult = MC_DRV_ERR_SESSION_PENDING;
-			break;
-		}
-
-		mcDrvCmdCloseDevice_t mcDrvCmdCloseDevice = {
-					// C++ does not support C99 designated initializers
-					/* .header = */ {
-						/* .commandId = */ MC_DRV_CMD_CLOSE_DEVICE
-					}
-				};
-		int len = connection_writeData(
-						devCon,
-						&mcDrvCmdCloseDevice,
-						sizeof(mcDrvCmdCloseDevice));
-		// ignore error, but log details
-		if (len < 0)
-		{
-			MCDRV_DBG_ERROR("CMD_CLOSE_DEVICE writeCmd failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
-		}
-
-		mcDrvResponseHeader_t  rspHeader;
-		len = connection_readDataBlock(
-					devCon,
-					&rspHeader,
-					sizeof(rspHeader));
-		if (len != sizeof(rspHeader))
-		{
-			MCDRV_DBG_ERROR("CMD_CLOSE_DEVICE readResp failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		/* Return if not all sessions have been closed */
+		if (mcore_device_has_sessions(device)) {
+			MCDRV_DBG_ERROR("cannot close with sessions pending");
+			mc_result = MC_DRV_ERR_SESSION_PENDING;
 			break;
 		}
 
-		if (MC_DRV_RSP_OK != rspHeader.responseId)
-		{
+		struct mc_drv_cmd_close_device_t mc_drv_cmd_close_device = {
+			/* C++ does not support C99 designated initializers */
+			/* .header = */ {
+				/* .command_id = */ MC_DRV_CMD_CLOSE_DEVICE
+			}
+		};
+		int len = connection_write_data(
+				dev_con,
+				&mc_drv_cmd_close_device,
+				sizeof(struct mc_drv_cmd_close_device_t));
+		/* ignore error, but log details */
+		if (len < 0) {
+			MCDRV_DBG_ERROR("CMD_CLOSE_DEVICE writeCmd failed "
+				"ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		}
+
+		struct mc_drv_response_header_t  rsp_header;
+		len = connection_read_datablock(
+					dev_con,
+					&rsp_header,
+					sizeof(rsp_header));
+		if (len != sizeof(rsp_header)) {
+			MCDRV_DBG_ERROR("CMD_CLOSE_DEVICE readResp failed "
+				" ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
+			break;
+		}
+
+		if (rsp_header.response_id != MC_DRV_RSP_OK) {
 			MCDRV_DBG_ERROR("CMD_CLOSE_DEVICE failed, respId=%d",
-							rspHeader.responseId);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+							rsp_header.response_id);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		removeDevice(deviceId);
+		remove_device(device_id);
 
 	} while (false);
 
-	//pthread_mutex_unlock(&mutex); // Exit critical section
+	/* Exit critical section */
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcCloseDevice);
+EXPORT_SYMBOL(mc_close_device);
 
-//------------------------------------------------------------------------------
-mcResult_t mcOpenSession(
-    mcSessionHandle_t  *session,
-    const mcUuid_t     *uuid,
-    uint8_t            *tci,
-    uint32_t           len
+enum mc_result mc_open_session(
+	struct mc_session_handle *session,
+	const struct mc_uuid_t	*uuid,
+	uint8_t			*tci,
+	uint32_t		len
 ) {
-	mcResult_t mcResult = MC_DRV_OK;
-	//static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	enum mc_result mc_result = MC_DRV_OK;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	//pthread_mutex_lock(&mutex); // Enter critical section
+	/* Enter critical section */
 
-	do
-	{
-		if (NULL == session)
-		{
+	do {
+		if (session == NULL) {
 			MCDRV_DBG_ERROR("Session is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
-		if (NULL == uuid)
-		{
+		if (uuid == NULL) {
 			MCDRV_DBG_ERROR("UUID is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
-		if (NULL == tci)
-		{
+		if (tci == NULL) {
 			MCDRV_DBG_ERROR("TCI is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
-		if (len > MC_MAX_TCI_LEN)
-		{
-			MCDRV_DBG_ERROR("TCI length is longer than %d", MC_MAX_TCI_LEN);
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+		if (len > MC_MAX_TCI_LEN) {
+			MCDRV_DBG_ERROR("TCI length is longer than %d",
+				MC_MAX_TCI_LEN);
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		// Get the device associated with the given session
-		mcore_device_t *device = resolveDeviceId(session->deviceId);
-		if (NULL == device)
-		{
+		/* Get the device associated with the given session */
+		struct mcore_device_t *device =
+				resolve_device_id(session->device_id);
+		if (device == NULL) {
 			MCDRV_DBG_ERROR("Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
-		connection_t *devCon = device->connection;
+		struct connection *dev_con = device->connection;
 
-		// Get the physical address of the given TCI
-		wsm_ptr pWsm = mcore_device_findContiguousWsm(device, tci);
-		if (NULL == pWsm)
-		{
-			MCDRV_DBG_ERROR("Could not resolve physical address of TCI");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+		/* Get the physical address of the given TCI */
+		struct wsm *wsm =
+			mcore_device_find_contiguous_wsm(device, tci);
+		if (wsm == NULL) {
+			MCDRV_DBG_ERROR("Could not resolve TCI phy address ");
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		if (pWsm->len < len)
-		{
+		if (wsm->len < len) {
 			MCDRV_DBG_ERROR("length is more than allocated TCI");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		// Prepare open session command
-		mcDrvCmdOpenSession_t cmdOpenSession = {
-							// C++ does not support C99 designated initializers
-							/* .header = */ {
-								/* .commandId = */ MC_DRV_CMD_OPEN_SESSION
-							},
-							/* .payload = */ {
-								/* .deviceId = */ session->deviceId,
-								/* .uuid = */ *uuid,
-								/* .tci = */ (uint32_t)pWsm->physAddr,
-								/* .len = */ len
-							}
-						};
+		/* Prepare open session command */
+		struct mc_drv_cmd_open_session_t cmdOpenSession = {
+			/* C++ does not support C99 designated initializers */
+			/* .header = */ {
+				/* .command_id = */ MC_DRV_CMD_OPEN_SESSION
+			},
+			/* .payload = */ {
+				/* .device_id = */ session->device_id,
+				/* .uuid = */ *uuid,
+				/* .tci = */ (uint32_t)wsm->phys_addr,
+				/* .len = */ len
+			}
+		};
 
-		// Transmit command data
+		/* Transmit command data */
 
-		int len = connection_writeData(
-						devCon,
+		int len = connection_write_data(
+						dev_con,
 						&cmdOpenSession,
 						sizeof(cmdOpenSession));
-		if (sizeof(cmdOpenSession) != len)
-		{
-			MCDRV_DBG_ERROR("CMD_OPEN_SESSION writeData failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		if (len != sizeof(cmdOpenSession)) {
+			MCDRV_DBG_ERROR("CMD_OPEN_SESSION writeData failed "
+				"ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		// Read command response
+		/* Read command response */
 
-		// read header first
-		mcDrvResponseHeader_t rspHeader;
-		len = connection_readDataBlock(
-					devCon,
-					&rspHeader,
-					sizeof(rspHeader));
-		if (sizeof(rspHeader) != len)
-		{
-			MCDRV_DBG_ERROR("CMD_OPEN_SESSION readResp failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		/* read header first */
+		struct mc_drv_response_header_t rsp_header;
+		len = connection_read_datablock(
+					dev_con,
+					&rsp_header,
+					sizeof(rsp_header));
+		if (len != sizeof(rsp_header)) {
+			MCDRV_DBG_ERROR("CMD_OPEN_SESSION readResp failed "
+				" ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		if (MC_DRV_RSP_OK != rspHeader.responseId)
-		{
+		if (rsp_header.response_id != MC_DRV_RSP_OK) {
 			MCDRV_DBG_ERROR("CMD_OPEN_SESSION failed, respId=%d",
-							rspHeader.responseId);
-			switch(rspHeader.responseId)
-			{
+							rsp_header.response_id);
+			switch (rsp_header.response_id) {
 			case MC_DRV_RSP_TRUSTLET_NOT_FOUND:
-				mcResult = MC_DRV_ERR_INVALID_DEVICE_FILE;
+				mc_result = MC_DRV_ERR_INVALID_DEVICE_FILE;
 				break;
 			case MC_DRV_RSP_PAYLOAD_LENGTH_ERROR:
 			case MC_DRV_RSP_DEVICE_NOT_OPENED:
 			case MC_DRV_RSP_FAILED:
 			default:
-				mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+				mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 				break;
 			}
 			break;
 		}
 
-		// read payload
-		mcDrvRspOpenSessionPayload_t rspOpenSessionPayload;
-		len = connection_readDataBlock(
-					devCon,
-					&rspOpenSessionPayload,
-					sizeof(rspOpenSessionPayload));
-		if (sizeof(rspOpenSessionPayload) != len)
-		{
-			MCDRV_DBG_ERROR("CMD_OPEN_SESSION readPayload failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		/* read payload */
+		struct mc_drv_rsp_open_session_payload_t
+						rsp_open_session_payload;
+		len = connection_read_datablock(
+					dev_con,
+					&rsp_open_session_payload,
+					sizeof(rsp_open_session_payload));
+		if (len != sizeof(rsp_open_session_payload)) {
+			MCDRV_DBG_ERROR("CMD_OPEN_SESSION readPayload failed "
+				"ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		// Register session with handle
-		session->sessionId = rspOpenSessionPayload.sessionId;
+		/* Register session with handle */
+		session->session_id = rsp_open_session_payload.session_id;
 
-		// Set up second channel for notifications
-		connection_t *sessionConnection = connection_new();
-		//TODO: no real need to connect here?
-		if (!connection_connect(sessionConnection, MC_DAEMON_PID))
-		{
-			MCDRV_DBG_ERROR("Could not setup netlink connection to PID %u",
-							MC_DAEMON_PID);
-			connection_cleanup(sessionConnection);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		/* Set up second channel for notifications */
+		struct connection *session_connection = connection_new();
+		/*TODO: no real need to connect here? */
+		if (!connection_connect(session_connection, MC_DAEMON_PID)) {
+			MCDRV_DBG_ERROR(
+				"Could not setup netlink connection to PID %u",
+				MC_DAEMON_PID);
+			connection_cleanup(session_connection);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		//TODO CONTINOUE HERE !!!! FIX RW RETURN HANDLING!!!!
+		/*TODO CONTINOUE HERE !!!! FIX RW RETURN HANDLING!!!! */
 
-		// Write command to use channel for notifications
-		mcDrvCmdNqConnect_t cmdNqConnect = {
-			// C++ does not support C99 designated initializers
+		/* Write command to use channel for notifications */
+		struct mc_drv_cmd_nqconnect_t cmd_nqconnect = {
+			/* C++ does not support C99 designated initializers */
 			/* .header = */ {
-				/* .commandId = */ MC_DRV_CMD_NQ_CONNECT
+				/* .command_id = */ MC_DRV_CMD_NQ_CONNECT
 			},
 			/* .payload = */ {
-				/* .deviceId =  */ session->deviceId,
-				/* .sessionId = */ session->sessionId,
-				/* .deviceSessionId = */ rspOpenSessionPayload.deviceSessionId,
-				/* .sessionMagic = */ rspOpenSessionPayload.sessionMagic
+				/* .device_id =  */ session->device_id,
+				/* .session_id = */ session->session_id,
+				/* .device_session_id = */
+				rsp_open_session_payload.device_session_id,
+				/* .session_magic = */
+					rsp_open_session_payload.session_magic
 			}
-											};
-		connection_writeData(sessionConnection,
-								&cmdNqConnect,
-								sizeof(cmdNqConnect));
+		};
+		connection_write_data(session_connection,
+			&cmd_nqconnect,
+			sizeof(cmd_nqconnect));
 
-
-		// Read command response, header first
-		len = connection_readDataBlock(
-					sessionConnection,
-					&rspHeader,
-					sizeof(rspHeader));
-		if (sizeof(rspHeader) != len)
-		{
-			MCDRV_DBG_ERROR("CMD_NQ_CONNECT readRsp failed, ret=%d", len);
-			connection_cleanup(sessionConnection);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		/* Read command response, header first */
+		len = connection_read_datablock(
+					session_connection,
+					&rsp_header,
+					sizeof(rsp_header));
+		if (len != sizeof(rsp_header)) {
+			MCDRV_DBG_ERROR("CMD_NQ_CONNECT readRsp failed "
+				"ret=%d", len);
+			connection_cleanup(session_connection);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		if (MC_DRV_RSP_OK != rspHeader.responseId)
-		{
+		if (rsp_header.response_id != MC_DRV_RSP_OK) {
 			MCDRV_DBG_ERROR("CMD_NQ_CONNECT failed, respId=%d",
-					rspHeader.responseId);
-			connection_cleanup(sessionConnection);
-			mcResult = MC_DRV_ERR_NQ_FAILED;
+					rsp_header.response_id);
+			connection_cleanup(session_connection);
+			mc_result = MC_DRV_ERR_NQ_FAILED;
 			break;
 		}
 
-		// there is no payload.
+		/* there is no payload. */
 
-		// Session has been established, new session object must be created
-		mcore_device_createNewSession(
+		/* Session established, new session object must be created */
+		mcore_device_create_new_session(
 			device,
-			session->sessionId,
-			sessionConnection);
+			session->session_id,
+			session_connection);
 
 	} while (false);
 
-	//pthread_mutex_unlock(&mutex); // Exit critical section
+	/* Exit critical section */
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcOpenSession);
+EXPORT_SYMBOL(mc_open_session);
 
-//------------------------------------------------------------------------------
-mcResult_t mcCloseSession(
-    mcSessionHandle_t *session
+enum mc_result mc_close_session(
+	struct mc_session_handle *session
 ) {
-	mcResult_t mcResult = MC_DRV_OK;
-	//static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	enum mc_result mc_result = MC_DRV_OK;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	//pthread_mutex_lock(&mutex); // Enter critical section
+	/* Enter critical section */
 
-	do
-	{
-		if (NULL == session)
-		{
+	do {
+		if (session == NULL) {
 			MCDRV_DBG_ERROR("Session is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		mcore_device_t  *device = resolveDeviceId(session->deviceId);
-		if (NULL == device)
-		{
+		struct mcore_device_t  *device =
+					resolve_device_id(session->device_id);
+		if (device == NULL) {
 			MCDRV_DBG_ERROR("Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
-		connection_t  *devCon = device->connection;
+		struct connection  *dev_con = device->connection;
 
-		session_t  *nqSession = mcore_device_resolveSessionId(device,
-									session->sessionId);
-		if (NULL == nqSession)
-		{
+		struct session  *nq_session =
+		 mcore_device_resolve_session_id(device, session->session_id);
+		if (nq_session == NULL) {
 			MCDRV_DBG_ERROR("Session not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_SESSION;
+			mc_result = MC_DRV_ERR_UNKNOWN_SESSION;
 			break;
 		}
 
-		// Write close session command
-		mcDrvCmdCloseSession_t cmdCloseSession = {
-					// C++ does not support C99 designated initializers
-					/* .header = */ {
-						/* .commandId = */ MC_DRV_CMD_CLOSE_SESSION
-					},
-					/* .payload = */ {
-						/* .sessionId = */ session->sessionId,
-					}
-				};
-		connection_writeData(
-			devCon,
-			&cmdCloseSession,
-			sizeof(cmdCloseSession));
+		/* Write close session command */
+		struct mc_drv_cmd_close_session_t cmd_close_session = {
+			/* C++ does not support C99 designated initializers */
+			/* .header = */ {
+				/* .command_id = */ MC_DRV_CMD_CLOSE_SESSION
+			},
+			/* .payload = */ {
+				/* .session_id = */ session->session_id,
+			}
+		};
+		connection_write_data(
+			dev_con,
+			&cmd_close_session,
+			sizeof(cmd_close_session));
 
-		// Read command response
-		mcDrvResponseHeader_t rspHeader;
-		int len = connection_readDataBlock(
-						devCon,
-						&rspHeader,
-						sizeof(rspHeader));
-		if (sizeof(rspHeader) != len)
-		{
-			MCDRV_DBG_ERROR("CMD_CLOSE_SESSION readRsp failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		/* Read command response */
+		struct mc_drv_response_header_t rsp_header;
+		int len = connection_read_datablock(
+						dev_con,
+						&rsp_header,
+						sizeof(rsp_header));
+		if (len != sizeof(rsp_header)) {
+			MCDRV_DBG_ERROR("CMD_CLOSE_SESSION readRsp failed "
+				"ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		if (MC_DRV_RSP_OK != rspHeader.responseId)
-		{
+		if (rsp_header.response_id != MC_DRV_RSP_OK) {
 			MCDRV_DBG_ERROR("CMD_CLOSE_SESSION failed, respId=%d",
-							rspHeader.responseId);
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+							rsp_header.response_id);
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
 
-		mcore_device_removeSession(device, session->sessionId);
-		mcResult = MC_DRV_OK;
+		mcore_device_remove_session(device, session->session_id);
+		mc_result = MC_DRV_OK;
 
 	} while (false);
 
-	//pthread_mutex_unlock(&mutex); // Exit critical section
+	/* Exit critical section */
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcCloseSession);
+EXPORT_SYMBOL(mc_close_session);
 
-//------------------------------------------------------------------------------
-mcResult_t mcNotify(
-    mcSessionHandle_t   *session
+enum mc_result mc_notify(
+	struct mc_session_handle   *session
 ) {
-	mcResult_t mcResult = MC_DRV_OK;
+	enum mc_result mc_result = MC_DRV_OK;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	do
-	{
-		if (NULL == session)
-		{
+	do {
+		if (session == NULL) {
 			MCDRV_DBG_ERROR("Session is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		mcore_device_t *device = resolveDeviceId(session->deviceId);
-		if (NULL == device)
-		{
+		struct mcore_device_t *device =
+					resolve_device_id(session->device_id);
+		if (device == NULL) {
 			MCDRV_DBG_ERROR("Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
-		connection_t *devCon = device->connection;
+		struct connection *dev_con = device->connection;
 
-		session_t  *nqsession = mcore_device_resolveSessionId(device,
-									session->sessionId);
-		if (NULL == nqsession)
-		{
+		struct session  *nqsession =
+		 mcore_device_resolve_session_id(device, session->session_id);
+		if (nqsession == NULL) {
 			MCDRV_DBG_ERROR("Session not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_SESSION;
+			mc_result = MC_DRV_ERR_UNKNOWN_SESSION;
 			break;
 		}
 
-		mcDrvCmdNotify_t cmdNotify = {
-						// C++ does not support C99 designated initializers
-						/* .header = */ {
-							/* .commandId = */ MC_DRV_CMD_NOTIFY
-						},
-						/* .payload = */ {
-							/* .sessionId = */ session->sessionId,
-						}
-					};
+		struct mc_drv_cmd_notify_t cmd_notify = {
+			/* C++ does not support C99 designated initializers */
+			/* .header = */ {
+				/* .command_id = */ MC_DRV_CMD_NOTIFY
+			},
+			/* .payload = */ {
+				/* .session_id = */ session->session_id,
+			}
+		};
 
-		connection_writeData(
-			devCon,
-			&cmdNotify,
-			sizeof(cmdNotify));
+		connection_write_data(
+			dev_con,
+			&cmd_notify,
+			sizeof(cmd_notify));
 
-		// Daemon will not return a response
+		/* Daemon will not return a response */
 
-	} while(false);
+	} while (false);
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcNotify);
+EXPORT_SYMBOL(mc_notify);
 
-//------------------------------------------------------------------------------
-mcResult_t mcWaitNotification(
-    mcSessionHandle_t  *session,
-    int32_t            timeout
+enum mc_result mc_wait_notification(
+	struct mc_session_handle  *session,
+	int32_t			timeout
 ) {
-	mcResult_t mcResult = MC_DRV_OK;
+	enum mc_result mc_result = MC_DRV_OK;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	do
-	{
-		if (NULL == session)
-		{
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+	do {
+		if (session == NULL) {
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		mcore_device_t  *device = resolveDeviceId(session->deviceId);
-		if (NULL == device)
-		{
+		struct mcore_device_t  *device =
+					resolve_device_id(session->device_id);
+		if (device == NULL) {
 			MCDRV_DBG_ERROR("Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
 
-		session_t  *nqSession = mcore_device_resolveSessionId(device,
-									session->sessionId);
-		if (NULL == nqSession)
-		{
+		struct session  *nq_session =
+		 mcore_device_resolve_session_id(device, session->session_id);
+		if (nq_session == NULL) {
 			MCDRV_DBG_ERROR("Session not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_SESSION;
+			mc_result = MC_DRV_ERR_UNKNOWN_SESSION;
 			break;
 		}
 
-		connection_t * nqconnection = nqSession->notificationConnection;
+		struct connection *nqconnection =
+					nq_session->notification_connection;
 		uint32_t count = 0;
 
-		// Read notification queue till it's empty
-		for(;;)
-		{
-			notification_t notification;
-			ssize_t numRead = connection_readData(
+		/* Read notification queue till it's empty */
+		for (;;) {
+			struct notification notification;
+			ssize_t num_read = connection_read_data(
 				nqconnection,
 				&notification,
-				sizeof(notification_t),
-													timeout);
-			//Exit on timeout in first run
-			//Later runs have timeout set to 0. -2 means, there is no more data.
-			if (0 == count && -2 == numRead)
-			{
+				sizeof(notification),
+				timeout);
+			/* Exit on timeout in first run. Later runs have
+			 * timeout set to 0.
+			 * -2 means, there is no more data. */
+			if (count == 0 && num_read == -2) {
 				MCDRV_DBG_ERROR("read timeout");
-				mcResult = MC_DRV_ERR_TIMEOUT;
+				mc_result = MC_DRV_ERR_TIMEOUT;
 				break;
 			}
-			// After first notification the queue will be drained, Thus we set
-			// no timeout for the following reads
+			/* After first notification the queue will be
+			 * drained, Thus we set no timeout for the
+			 * following reads */
 			timeout = 0;
 
-			if (numRead != sizeof(notification_t))
-			{
-				if (0 == count)
-				{
-					//failure in first read, notify it
-					mcResult = MC_DRV_ERR_NOTIFICATION;
-					MCDRV_DBG_ERROR("read notification failed, %i bytes received",
-									(int)numRead);
+			if (num_read != sizeof(struct notification)) {
+				if (count == 0) {
+					/* failure in first read, notify it */
+					mc_result = MC_DRV_ERR_NOTIFICATION;
+					MCDRV_DBG_ERROR(
+					"read notification failed, "
+					"%i bytes received", (int)num_read);
 					break;
-				}
-				else
-				{
-					// Read of the n-th notification failed/timeout. We don't
-					// tell the caller, as we got valid notifications before.
-					mcResult = MC_DRV_OK;
+				} else {
+					/* Read of the n-th notification
+					   failed/timeout. We don't tell the
+					   caller, as we got valid notifications
+					   before. */
+					mc_result = MC_DRV_OK;
 					break;
 				}
 			}
 
 			count++;
-			MCDRV_DBG_VERBOSE("readNq count=%d, SessionID=%d, Payload=%d",
-					count, notification.sessionId, notification.payload);
+			MCDRV_DBG_VERBOSE("readNq count=%d, SessionID=%d, "
+				"Payload=%d", count,
+				notification.session_id, notification.payload);
 
-			if (0 != notification.payload)
-			{
-				// Session end point died -> store exit code
-				session_setErrorInfo(nqSession, notification.payload);
+			if (notification.payload != 0) {
+				/* Session end point died -> store exit code */
+				session_set_error_info(nq_session,
+					notification.payload);
 
-				mcResult = MC_DRV_INFO_NOTIFICATION;
+				mc_result = MC_DRV_INFO_NOTIFICATION;
 				break;
 			}
-		} // for(;;)
+		} /* for(;;) */
 
 	} while (false);
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcWaitNotification);
+EXPORT_SYMBOL(mc_wait_notification);
 
-//------------------------------------------------------------------------------
-mcResult_t mcMallocWsm(
-    uint32_t    deviceId,
-    uint32_t    align,
-    uint32_t    len,
-    uint8_t     **wsm,
-    uint32_t    wsmFlags
+enum mc_result mc_malloc_wsm(
+	uint32_t	device_id,
+	uint32_t	align,
+	uint32_t	len,
+	uint8_t		**wsm,
+	uint32_t	wsm_flags
 ) {
-	mcResult_t mcResult = MC_DRV_ERR_UNKNOWN;
-	//static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	enum mc_result mc_result = MC_DRV_ERR_UNKNOWN;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	//pthread_mutex_lock(&mutex);
+	/* Enter critical section */
 
-	do
-	{
-		mcore_device_t *device = resolveDeviceId(deviceId);
-		if (NULL == device)
-		{
+	do {
+		struct mcore_device_t *device = resolve_device_id(device_id);
+		if (device == NULL) {
 			MCDRV_DBG_ERROR("Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
-		if(NULL == wsm)
-		{
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+		if (wsm == NULL) {
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		wsm_ptr pWsm =  mcore_device_allocateContiguousWsm(device, len);
-		if (NULL == pWsm)
-		{
+		struct wsm *wsm_stack =
+			mcore_device_allocate_contiguous_wsm(device, len);
+		if (wsm_stack == NULL) {
 			MCDRV_DBG_ERROR("Allocation of WSM failed");
-			mcResult = MC_DRV_ERR_NO_FREE_MEMORY;
+			mc_result = MC_DRV_ERR_NO_FREE_MEMORY;
 			break;
 		}
 
-		*wsm = (uint8_t*)pWsm->virtAddr;
-		mcResult = MC_DRV_OK;
+		*wsm = (uint8_t *)wsm_stack->virt_addr;
+		mc_result = MC_DRV_OK;
 
 	} while (false);
 
-	//pthread_mutex_unlock(&mutex); // Exit critical section
+	/* Exit critical section */
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcMallocWsm);
+EXPORT_SYMBOL(mc_malloc_wsm);
 
-//------------------------------------------------------------------------------
-mcResult_t mcFreeWsm(
-    uint32_t    deviceId,
-    uint8_t     *wsm
+enum mc_result mc_free_wsm(
+	uint32_t	device_id,
+	uint8_t		*wsm
 ) {
-	mcResult_t mcResult = MC_DRV_ERR_UNKNOWN;
-	mcore_device_t *device;
+	enum mc_result mc_result = MC_DRV_ERR_UNKNOWN;
+	struct mcore_device_t *device;
 
-	//static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	//pthread_mutex_lock(&mutex); // Enter critical section
+	/* Enter critical section */
 
 	do {
 
-		// Get the device associated wit the given session
-		device = resolveDeviceId(deviceId);
-		if (NULL == device)
-		{
-			MCDRV_DBG_ERROR("mcFreeWsm(): Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+		/* Get the device associated wit the given session */
+		device = resolve_device_id(device_id);
+		if (device == NULL) {
+			MCDRV_DBG_ERROR("Device not found");
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
 
-		// find WSM object
-		wsm_ptr pWsm = mcore_device_findContiguousWsm(device, wsm);
-		if (NULL == pWsm)
-		{
-			MCDRV_DBG_ERROR("mcFreeWsm(): unknown address");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+		/* find WSM object */
+		struct wsm *wsm_stack =
+			mcore_device_find_contiguous_wsm(device, wsm);
+		if (wsm_stack == NULL) {
+			MCDRV_DBG_ERROR("unknown address");
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		// Free the given virtual address
-		if (!mcore_device_freeContiguousWsm(device, pWsm))
-		{
-			MCDRV_DBG_ERROR("mcFreeWsm(): Free of virtual address failed");
-			mcResult = MC_DRV_ERR_FREE_MEMORY_FAILED;
+		/* Free the given virtual address */
+		if (!mcore_device_free_contiguous_wsm(device, wsm_stack)) {
+			MCDRV_DBG_ERROR("Free of virtual address failed");
+			mc_result = MC_DRV_ERR_FREE_MEMORY_FAILED;
 			break;
 		}
-		mcResult = MC_DRV_OK;
+		mc_result = MC_DRV_OK;
 
 	} while (false);
 
-	//pthread_mutex_unlock(&mutex); // Exit critical section
+	/* Exit critical section */
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcFreeWsm);
+EXPORT_SYMBOL(mc_free_wsm);
 
-//------------------------------------------------------------------------------
-mcResult_t mcMap(
-    mcSessionHandle_t  *sessionHandle,
-    void               *buf,
-    uint32_t           bufLen,
-    mcBulkMap_t        *mapInfo
+enum mc_result mc_map(
+	struct mc_session_handle	*session_handle,
+	void				*buf,
+	uint32_t			buf_len,
+	struct mc_bulk_map		*map_info
 ) {
-	mcResult_t mcResult = MC_DRV_ERR_UNKNOWN;
-	//static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	enum mc_result mc_result = MC_DRV_ERR_UNKNOWN;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	//pthread_mutex_lock(&mutex); // Enter critical section
+	/* Enter critical section */
 
-	do
-	{
-		if (NULL == sessionHandle)
-		{
-			MCDRV_DBG_ERROR("sessionHandle is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+	do {
+		if (session_handle == NULL) {
+			MCDRV_DBG_ERROR("session_handle is null");
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
-		if (NULL == mapInfo)
-		{
-			MCDRV_DBG_ERROR("mapInfo is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+		if (map_info == NULL) {
+			MCDRV_DBG_ERROR("map_info is null");
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
-		if (NULL == buf)
-		{
+		if (buf == NULL) {
 			MCDRV_DBG_ERROR("buf is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		// Determine device the session belongs to
-		mcore_device_t  *device = resolveDeviceId(sessionHandle->deviceId);
-		if (NULL == device) {
+		/* Determine device the session belongs to */
+		struct mcore_device_t  *device = resolve_device_id(
+						session_handle->device_id);
+		if (device == NULL) {
 			MCDRV_DBG_ERROR("Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
-		connection_t *devCon = device->connection;
+		struct connection *dev_con = device->connection;
 
-		// Get session
-		session_t  *session = mcore_device_resolveSessionId(device,
-								sessionHandle->sessionId);
-		if (NULL == session)
-		{
+		/* Get session */
+		struct session  *session =
+		mcore_device_resolve_session_id(device,
+						session_handle->session_id);
+		if (session == NULL) {
 			MCDRV_DBG_ERROR("Session not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_SESSION;
+			mc_result = MC_DRV_ERR_UNKNOWN_SESSION;
 			break;
 		}
 
-		// Register mapped bulk buffer to Kernel Module and keep mapped
-		// bulk buffer in mind
-		bulkBufferDescriptor_t *bulkBuf = session_addBulkBuf(session, buf,
-											bufLen);
-		if (NULL == bulkBuf)
-		{
+		/* Register mapped bulk buffer to Kernel Module and keep mapped
+		   bulk buffer in mind */
+		struct bulk_buffer_descriptor *bulk_buf = session_add_bulk_buf(
+			session, buf, buf_len);
+		if (bulk_buf == NULL) {
 			MCDRV_DBG_ERROR("Error mapping bulk buffer");
-			mcResult = MC_DRV_ERR_BULK_MAPPING;
+			mc_result = MC_DRV_ERR_BULK_MAPPING;
 			break;
 		}
 
-
-		// Prepare map command
-		mcDrvCmdMapBulkMem_t mcDrvCmdMapBulkMem = {
-			// C++ does not support C99 designated initializers
+		/* Prepare map command */
+		struct mc_drv_cmd_map_bulk_mem_t mc_drv_cmd_map_bulk_mem = {
+			/* C++ does not support C99 designated initializers */
 			/* .header = */ {
-				/* .commandId = */ MC_DRV_CMD_MAP_BULK_BUF
+				/* .command_id = */ MC_DRV_CMD_MAP_BULK_BUF
 			},
 			/* .payload = */ {
-				/* .sessionId = */ session->sessionId,
-				/* .pAddrL2 = */ (uint32_t)bulkBuf->physAddrWsmL2,
-				/* .offsetPayload = */ (uint32_t)(bulkBuf->virtAddr) & 0xFFF,
-				/* .lenBulkMem = */ bulkBuf->len
+				/* .session_id = */ session->session_id,
+				/* .handle = */ bulk_buf->handle,
+				/* .phys_addr_l2; = */
+					(uint32_t)bulk_buf->phys_addr_wsm_l2,
+				/* .offset_payload = */
+					(uint32_t)(bulk_buf->virt_addr) & 0xFFF,
+				/* .len_bulk_mem = */ bulk_buf->len
 			}
 		};
 
-		// Transmit map command to MobiCore device
-		connection_writeData(
-			devCon,
-			&mcDrvCmdMapBulkMem,
-			sizeof(mcDrvCmdMapBulkMem));
+		/* Transmit map command to MobiCore device */
+		connection_write_data(
+			dev_con,
+			&mc_drv_cmd_map_bulk_mem,
+			sizeof(mc_drv_cmd_map_bulk_mem));
 
-		// Read command response
-		mcDrvResponseHeader_t rspHeader;
-		int len = connection_readDataBlock(
-						devCon,
-						&rspHeader,
-						sizeof(rspHeader));
-		if (sizeof(rspHeader) != len)
-		{
-			MCDRV_DBG_ERROR("CMD_MAP_BULK_BUF readRsp failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		/* Read command response */
+		struct mc_drv_response_header_t rsp_header;
+		int len = connection_read_datablock(
+						dev_con,
+						&rsp_header,
+						sizeof(rsp_header));
+		if (len != sizeof(rsp_header)) {
+			MCDRV_DBG_ERROR("CMD_MAP_BULK_BUF readRsp failed, "
+				"ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		if (MC_DRV_RSP_OK != rspHeader.responseId)
-		{
+		if (rsp_header.response_id != MC_DRV_RSP_OK) {
 			MCDRV_DBG_ERROR("CMD_MAP_BULK_BUF failed, respId=%d",
-							rspHeader.responseId);
-			// REV We ignore Daemon Error code because client cannot
-			// handle it anyhow.
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+							rsp_header.response_id);
+			/* REV We ignore Daemon Error code because client cannot
+			   handle it anyhow. */
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 
-			// Unregister mapped bulk buffer from Kernel Module and
-			// remove mapped bulk buffer from session maintenance
-			if (!session_removeBulkBuf(session, buf))
-			{
-				// Removing of bulk buffer not possible
-				MCDRV_DBG_ERROR("Unregistering of bulk memory from "
-									"Kernel Module failed");
+			/* Unregister mapped bulk buffer from Kernel Module and
+			   remove mapped bulk buffer from session maintenance */
+			if (!session_remove_bulk_buf(session, buf)) {
+				/* Removing of bulk buffer not possible */
+				MCDRV_DBG_ERROR("Unregistering of bulk memory"
+					"from Kernel Module failed");
 			}
 			break;
 		}
 
-		mcDrvRspMapBulkMemPayload_t rspMapBulkMemPayload;
-		connection_readDataBlock(
-			devCon,
-			&rspMapBulkMemPayload,
-			sizeof(rspMapBulkMemPayload));
+		struct mc_drv_rsp_map_bulk_mem_payload_t
+						rsp_map_bulk_mem_payload;
+		connection_read_datablock(
+			dev_con,
+			&rsp_map_bulk_mem_payload,
+			sizeof(rsp_map_bulk_mem_payload));
 
-		// Set mapping info for Trustlet
-		mapInfo->sVirtualAddr = (void *)(rspMapBulkMemPayload.secureVirtualAdr);
-		mapInfo->sVirtualLen = bufLen;
-		mcResult = MC_DRV_OK;
+		/* Set mapping info for Trustlet */
+		map_info->secure_virt_addr =
+			(void *)(rsp_map_bulk_mem_payload.secure_virtual_adr);
+		map_info->secure_virt_len = buf_len;
+		mc_result = MC_DRV_OK;
 
 	} while (false);
 
-	//pthread_mutex_unlock(&mutex); // Exit critical section
+	/* Exit critical section */
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcMap);
+EXPORT_SYMBOL(mc_map);
 
-//------------------------------------------------------------------------------
-mcResult_t mcUnmap(
-    mcSessionHandle_t  *sessionHandle,
-    void               *buf,
-    mcBulkMap_t        *mapInfo
+enum mc_result mc_unmap(
+	struct mc_session_handle	*session_handle,
+	void				*buf,
+	struct mc_bulk_map		*map_info
 ) {
-	mcResult_t mcResult = MC_DRV_ERR_UNKNOWN;
-	//static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	enum mc_result mc_result = MC_DRV_ERR_UNKNOWN;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	//pthread_mutex_lock(&mutex); // Enter critical section
+	/* Enter critical section */
 
-	do
-	{
-		if (NULL == sessionHandle)
-		{
-			MCDRV_DBG_ERROR("sessionHandle is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+	do {
+		if (session_handle == NULL) {
+			MCDRV_DBG_ERROR("session_handle is null");
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
-		if (NULL == mapInfo)
-		{
-			MCDRV_DBG_ERROR("mapInfo is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+		if (map_info == NULL) {
+			MCDRV_DBG_ERROR("map_info is null");
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
-		if (NULL == buf)
-		{
+		if (buf == NULL) {
 			MCDRV_DBG_ERROR("buf is null");
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		// Determine device the session belongs to
-		mcore_device_t  *device = resolveDeviceId(sessionHandle->deviceId);
-		if (NULL == device)
-		{
+		/* Determine device the session belongs to */
+		struct mcore_device_t  *device =
+			resolve_device_id(session_handle->device_id);
+		if (device == NULL) {
 			MCDRV_DBG_ERROR("Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
-		connection_t  *devCon = device->connection;
+		struct connection  *dev_con = device->connection;
 
-		// Get session
-		session_t  *session = mcore_device_resolveSessionId(device,
-												sessionHandle->sessionId);
-		if (NULL == session)
-		{
+		/* Get session */
+		struct session  *session =
+			mcore_device_resolve_session_id(device,
+						session_handle->session_id);
+		if (session == NULL) {
 			MCDRV_DBG_ERROR("Session not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_SESSION;
+			mc_result = MC_DRV_ERR_UNKNOWN_SESSION;
 			break;
 		}
 
-		// Prepare unmap command
-		mcDrvCmdUnmapBulkMem_t cmdUnmapBulkMem = {
-				// C++ does not support C99 designated initializers
+		uint32_t handle = session_find_bulk_buf(session, buf);
+		if (handle == 0) {
+			MCDRV_DBG_ERROR("Buffer not found");
+			mc_result = MC_DRV_ERR_BULK_UNMAPPING;
+			break;
+		}
+
+
+		/* Prepare unmap command */
+		struct mc_drv_cmd_unmap_bulk_mem_t cmd_unmap_bulk_mem = {
 				/* .header = */ {
-					/* .commandId = */ MC_DRV_CMD_UNMAP_BULK_BUF
+					/* .command_id = */
+						MC_DRV_CMD_UNMAP_BULK_BUF
 				},
 				/* .payload = */ {
-					/* .sessionId = */ session->sessionId,
-					/* .secureVirtualAdr = */ (uint32_t)(mapInfo->sVirtualAddr),
-					/* .lenBulkMem = mapInfo->sVirtualLen*/
+					/* .session_id = */ session->session_id,
+					/* .handle = */ handle,
+					/* .secure_virtual_adr = */
+					(uint32_t)(map_info->secure_virt_addr),
+					/* .len_bulk_mem =
+						map_info->secure_virt_len*/
 				}
 			};
 
-		connection_writeData(
-			devCon,
-			&cmdUnmapBulkMem,
-			sizeof(cmdUnmapBulkMem));
+		connection_write_data(
+			dev_con,
+			&cmd_unmap_bulk_mem,
+			sizeof(cmd_unmap_bulk_mem));
 
-		// Read command response
-		mcDrvResponseHeader_t rspHeader;
-		int len = connection_readDataBlock(
-						devCon,
-						&rspHeader,
-						sizeof(rspHeader));
-		if (sizeof(rspHeader) != len)
-		{
-			MCDRV_DBG_ERROR("CMD_UNMAP_BULK_BUF readRsp failed, ret=%d", len);
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+		/* Read command response */
+		struct mc_drv_response_header_t rsp_header;
+		int len = connection_read_datablock(
+						dev_con,
+						&rsp_header,
+						sizeof(rsp_header));
+		if (len != sizeof(rsp_header)) {
+			MCDRV_DBG_ERROR("CMD_UNMAP_BULK_BUF readRsp failed, "
+				"ret=%d", len);
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		if (MC_DRV_RSP_OK != rspHeader.responseId)
-		{
+		if (rsp_header.response_id != MC_DRV_RSP_OK) {
 			MCDRV_DBG_ERROR("CMD_UNMAP_BULK_BUF failed, respId=%d",
-											rspHeader.responseId);
-			// REV We ignore Daemon Error code because client
-			// cannot handle it anyhow.
-			mcResult = MC_DRV_ERR_DAEMON_UNREACHABLE;
+							rsp_header.response_id);
+			/* REV We ignore Daemon Error code because client
+			   cannot handle it anyhow. */
+			mc_result = MC_DRV_ERR_DAEMON_UNREACHABLE;
 			break;
 		}
 
-		mcDrvRspUnmapBulkMemPayload_t rspUnmapBulkMemPayload;
-		connection_readDataBlock(
-			devCon,
-			&rspUnmapBulkMemPayload,
-			sizeof(rspUnmapBulkMemPayload));
+		struct mc_drv_rsp_unmap_bulk_mem_payload_t
+						rsp_unmap_bulk_mem_payload;
+		connection_read_datablock(
+			dev_con,
+			&rsp_unmap_bulk_mem_payload,
+			sizeof(rsp_unmap_bulk_mem_payload));
 
-		// REV axh: what about check the payload?
+		/* REV axh: what about check the payload? */
 
-		// Unregister mapped bulk buffer from Kernel Module and remove mapped
-		// bulk buffer from session maintenance
-		if (!session_removeBulkBuf(session, buf))
-		{
-			// Removing of bulk buffer not possible
+		/* Unregister mapped bulk buffer from Kernel Module and
+		 * remove mapped bulk buffer from session maintenance */
+		if (!session_remove_bulk_buf(session, buf)) {
+			/* Removing of bulk buffer not possible */
 			MCDRV_DBG_ERROR("Unregistering of bulk memory from "
-										"Kernel Module failed");
-			mcResult = MC_DRV_ERR_BULK_UNMAPPING;
+							"Kernel Module failed");
+			mc_result = MC_DRV_ERR_BULK_UNMAPPING;
 			break;
 		}
 
-		mcResult = MC_DRV_OK;
+		mc_result = MC_DRV_OK;
 
 	} while (false);
 
-	//pthread_mutex_unlock(&mutex); // Exit critical section
+	/* Exit critical section */
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcUnmap);
+EXPORT_SYMBOL(mc_unmap);
 
-//------------------------------------------------------------------------------
-mcResult_t mcGetSessionErrorCode(
-    mcSessionHandle_t   *session,
-    int32_t             *lastErr
+enum mc_result mc_get_session_error_code(
+	struct mc_session_handle   *session,
+	int32_t			 *last_error
 ) {
-	mcResult_t mcResult = MC_DRV_OK;
+	enum mc_result mc_result = MC_DRV_OK;
 
 	MCDRV_DBG_VERBOSE("===%s()===", __func__);
 
-	do
-	{
-		if (NULL == session || NULL == lastErr)
-		{
-			mcResult = MC_DRV_ERR_INVALID_PARAMETER;
+	do {
+		if (session == NULL || last_error == NULL) {
+			mc_result = MC_DRV_ERR_INVALID_PARAMETER;
 			break;
 		}
 
-		// Get device
-		mcore_device_t *device = resolveDeviceId(session->deviceId);
-		if (NULL == device)
-		{
-			MCDRV_DBG_ERROR("mcGetSessionErrorCode(): Device not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_DEVICE;
+		/* Get device */
+		struct mcore_device_t *device =
+					resolve_device_id(session->device_id);
+		if (device == NULL) {
+			MCDRV_DBG_ERROR("Device not found");
+			mc_result = MC_DRV_ERR_UNKNOWN_DEVICE;
 			break;
 		}
 
-		// Get session
-		session_t *nqsession = mcore_device_resolveSessionId(device,
-															session->sessionId);
-		if (NULL == nqsession)
-		{
-			MCDRV_DBG_ERROR("mcGetSessionErrorCode(): Session not found");
-			mcResult = MC_DRV_ERR_UNKNOWN_SESSION;
+		/* Get session */
+		struct session *nqsession =
+		 mcore_device_resolve_session_id(device, session->session_id);
+		if (nqsession == NULL) {
+			MCDRV_DBG_ERROR("Session not found");
+			mc_result = MC_DRV_ERR_UNKNOWN_SESSION;
 			break;
 		}
 
-		// get session error code from session
-		*lastErr = session_getLastErr(nqsession);
+		/* get session error code from session */
+		*last_error = session_get_last_err(nqsession);
 
 	} while (false);
 
-	return mcResult;
+	return mc_result;
 }
-EXPORT_SYMBOL(mcGetSessionErrorCode);
+EXPORT_SYMBOL(mc_get_session_error_code);
 
-//------------------------------------------------------------------------------
-mcResult_t mcDriverCtrl(
-    mcDriverCtrl_t  param,
-    uint8_t         *data,
-    uint32_t        len
+enum mc_result mc_driver_ctrl(
+	enum mc_driver_ctrl  param,
+	uint8_t		 *data,
+	uint32_t		len
 ) {
 	MCDRV_DBG_WARN("not implemented");
 	return MC_DRV_ERR_NOT_IMPLEMENTED;
 }
-EXPORT_SYMBOL(mcDriverCtrl);
+EXPORT_SYMBOL(mc_driver_ctrl);
 
-//------------------------------------------------------------------------------
-mcResult_t mcManage(
-    uint32_t  deviceId,
-    uint8_t   *data,
-    uint32_t  len
+enum mc_result mc_manage(
+	uint32_t  device_id,
+	uint8_t   *data,
+	uint32_t  len
 ) {
 	MCDRV_DBG_WARN("not implemented");
 	return MC_DRV_ERR_NOT_IMPLEMENTED;
 }
-EXPORT_SYMBOL(mcManage);
+EXPORT_SYMBOL(mc_manage);
+
